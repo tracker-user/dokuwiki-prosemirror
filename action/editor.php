@@ -1,7 +1,11 @@
 <?php
+if (!defined('DOKU_INC')) die();
 
 /**
  * DokuWiki Plugin prosemirror (Action Component)
+ *
+ * Injects the WYSIWYG editor toggle button, the prosemirror JSON hidden field,
+ * and the auxiliary link/media forms into the edit page.
  *
  * @license GPL 2 http://www.gnu.org/licenses/gpl-2.0.html
  * @author  Andreas Gohr <gohr@cosmocode.de>
@@ -16,7 +20,7 @@ use dokuwiki\Form\ButtonElement;
 class action_plugin_prosemirror_editor extends ActionPlugin
 {
     /**
-     * Registers a callback function for a given event
+     * Registers event handlers
      *
      * @param EventHandler $controller DokuWiki's event controller object
      *
@@ -27,7 +31,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $controller->register_hook('ACTION_HEADERS_SEND', 'BEFORE', $this, 'forceWYSIWYG');
         $controller->register_hook('ACTION_HEADERS_SEND', 'AFTER', $this, 'addJSINFO');
         $controller->register_hook('FORM_EDIT_OUTPUT', 'BEFORE', $this, 'addDataAndToggleButton');
-        $controller->register_hook('TPL_ACT_RENDER', 'AFTER', $this, 'addAddtionalForms');
+        $controller->register_hook('TPL_ACT_RENDER', 'AFTER', $this, 'addAdditionalForms');
     }
 
     /**
@@ -36,7 +40,9 @@ class action_plugin_prosemirror_editor extends ActionPlugin
      * Triggered by event: ACTION_HEADERS_SEND
      *
      * @param Event $event
-     * @param            $param
+     * @param mixed $param
+     *
+     * @return void
      */
     public function forceWYSIWYG(Event $event, $param)
     {
@@ -46,13 +52,12 @@ class action_plugin_prosemirror_editor extends ActionPlugin
     }
 
     /**
-     * Add the editor toggle button and, if using the WYSIWYG editor, the instructions rendered to json
+     * Add the editor toggle button and, if WYSIWYG is active, the page JSON
      *
-     * Triggered by event: HTML_EDITFORM_OUTPUT
+     * Triggered by event: FORM_EDIT_OUTPUT
      *
      * @param Event $event event object
-     * @param mixed      $param  [the parameters passed as fifth argument to register_hook() when this
-     *                           handler was registered]
+     * @param mixed $param
      *
      * @return void
      */
@@ -62,12 +67,13 @@ class action_plugin_prosemirror_editor extends ActionPlugin
             return;
         }
 
-        /** @var Doku_Form|Form $form */
+        /** @var Form $form */
         $form = $event->data;
 
-        // return early if content is not editable
-        if ($this->isReadOnly($form)) return;
-
+        // Return early when the textarea is read-only
+        if ($this->isReadOnly($form)) {
+            return;
+        }
 
         $useWYSIWYG = get_doku_pref('plugin_prosemirror_useWYSIWYG', false);
 
@@ -80,7 +86,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
             } catch (Throwable $e) {
                 $errorMsg = 'Rendering the page\'s syntax for the WYSIWYG editor failed: ' . $e->getMessage();
 
-                /** @var \helper_plugin_prosemirror $helper */
+                /** @var helper_plugin_prosemirror $helper */
                 $helper = plugin_load('helper', 'prosemirror');
                 if ($helper->tryToLogErrorToSentry($e, ['text' => $TEXT])) {
                     $errorMsg .= ' -- The error has been logged to Sentry.';
@@ -99,7 +105,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
     /**
      * Create the button to toggle the WYSIWYG editor
      *
-     * Creates it as hidden if forcing WYSIWYG
+     * The button is hidden when the WYSIWYG editor is forced on the user.
      *
      * @return ButtonElement
      */
@@ -125,9 +131,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
     }
 
     /**
-     * Forbid using WYSIWYG editor when editing anything else then sections or the entire page
-     *
-     * This would be the case for the edittable editor or the editor of the data plugin
+     * Return false when editing a non-section/non-page target (e.g. edittable, data plugin)
      *
      * @return bool
      */
@@ -137,16 +141,26 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         return !$INPUT->has('target') || $INPUT->str('target') === 'section';
     }
 
-    public function addAddtionalForms(Event $event)
+    /**
+     * Output the auxiliary link form, media form, and code-language datalist
+     *
+     * Triggered by event: TPL_ACT_RENDER
+     *
+     * @param Event $event
+     *
+     * @return void
+     */
+    public function addAdditionalForms(Event $event)
     {
         if (!$this->allowWYSIWYG()) {
             return;
         }
 
-        if (!in_array($event->data, ['edit', 'preview'])) {
+        if (!in_array($event->data, ['edit', 'preview'], true)) {
             return;
         }
 
+        // ── Link form ──────────────────────────────────────────────────────────
         $linkForm = new Form([
             'class' => 'plugin_prosemirror_linkform',
             'id' => 'prosemirror-linkform',
@@ -158,14 +172,12 @@ class action_plugin_prosemirror_editor extends ActionPlugin
 
         $linkForm->addButtonHTML('linkwiz', inlineSVG(DOKU_PLUGIN . 'prosemirror/images/link.svg'))->attrs([
             'type' => 'button',
-            'class' => 'js-open-linkwiz linkform_linkwiz'
+            'class' => 'js-open-linkwiz linkform_linkwiz',
         ]);
-        $linkForm->addTextInput('linktarget', $this->getLang('link target'))->attrs(
-            [
+        $linkForm->addTextInput('linktarget', $this->getLang('link target'))->attrs([
             'required' => 'required',
             'autofocus' => 'autofocus',
-            ]
-        );
+        ]);
 
         $linkForm->addTagOpen('div')->addClass('radio-wrapper');
         $linkForm->addTagOpen('fieldset');
@@ -192,12 +204,12 @@ class action_plugin_prosemirror_editor extends ActionPlugin
             ->attr('checked', 'checked');
         $linkForm->addRadioButton('nametype', $this->getLang('type:custom title'))->val('custom');
         $linkForm->addRadioButton('nametype', $this->getLang('type:image'))->val('image');
-        $linkForm->addTextInput('linkname', 'Link name')->attr('placeholder', $this->getLang('placeholder:link name'));
+        $linkForm->addTextInput('linkname', 'Link name')
+            ->attr('placeholder', $this->getLang('placeholder:link name'));
         $linkForm->addTagOpen('div')->addClass('js-media-wrapper');
         $linkForm->addTagClose('div');
         $linkForm->addTagClose('fieldset');
         $linkForm->addTagClose('div');
-
 
         $linkForm->addFieldsetClose();
         $linkForm->addButton('ok-button', 'OK')->attr('type', 'submit');
@@ -205,6 +217,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
 
         echo $linkForm->toHTML();
 
+        // ── Media form ─────────────────────────────────────────────────────────
         $mediaForm = new Form([
             'class' => 'plugin_prosemirror_mediaform',
             'id' => 'prosemirror-mediaform',
@@ -215,15 +228,13 @@ class action_plugin_prosemirror_editor extends ActionPlugin
             'mediamanager',
             inlineSVG(DOKU_PLUGIN . 'prosemirror/images/file-image-outline.svg')
         )->attrs([
-                'type' => 'button',
-                'class' => 'js-open-mediamanager mediaform_mediamanager'
+            'type' => 'button',
+            'class' => 'js-open-mediamanager mediaform_mediamanager',
         ]);
-        $mediaForm->addTextInput('mediatarget', $this->getLang('media target'))->attrs(
-            [
-                'required' => 'required',
-                'autofocus' => 'autofocus',
-            ]
-        );
+        $mediaForm->addTextInput('mediatarget', $this->getLang('media target'))->attrs([
+            'required' => 'required',
+            'autofocus' => 'autofocus',
+        ]);
         $mediaForm->addTextInput('mediacaption', $this->getLang('label:caption'));
 
         $mediaForm->addTagOpen('div')->addClass('image-properties');
@@ -282,29 +293,32 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $mediaForm->addTagClose('fieldset');
         $mediaForm->addTagClose('div');
 
-        $mediaForm->addTagClose('div'); // end of image-properties
+        $mediaForm->addTagClose('div'); // end .image-properties
 
         $mediaForm->addFieldsetClose();
         $mediaForm->addButton('ok-button', 'OK')->attr('type', 'submit');
         $mediaForm->addButton('cancel-button', $this->getLang('cancel'))->attr('type', 'button');
 
-        // dynamic image hack? https://www.dokuwiki.org/images#dynamic_images
-
         echo $mediaForm->toHTML();
 
+        // ── Code-language datalist ─────────────────────────────────────────────
         // phpcs:disable
         $languages = explode(' ', '4cs 6502acme 6502kickass 6502tasm 68000devpac abap actionscript3 actionscript ada aimms algol68 apache applescript apt_sources arm asm asp asymptote autoconf autohotkey autoit avisynth awk bascomavr bash basic4gl batch bf biblatex bibtex blitzbasic bnf boo caddcl cadlisp ceylon cfdg cfm chaiscript chapel cil c_loadrunner clojure c_mac cmake cobol coffeescript c cpp cpp-qt cpp-winapi csharp css cuesheet c_winapi dart dcl dcpu16 dcs delphi diff div dos dot d ecmascript eiffel email epc e erlang euphoria ezt f1 falcon fo fortran freebasic freeswitch fsharp gambas gdb genero genie gettext glsl gml gnuplot go groovy gwbasic haskell haxe hicest hq9plus html html4strict html5 icon idl ini inno intercal io ispfpanel java5 java javascript jcl j jquery julia kixtart klonec klonecpp kotlin latex lb ldif lisp llvm locobasic logtalk lolcode lotusformulas lotusscript lscript lsl2 lua m68k magiksf make mapbasic mathematica matlab mercury metapost mirc mk-61 mmix modula2 modula3 mpasm mxml mysql nagios netrexx newlisp nginx nimrod nsis oberon2 objc objeck ocaml-brief ocaml octave oobas oorexx oracle11 oracle8 oxygene oz parasail parigp pascal pcre perl6 perl per pf phix php-brief php pic16 pike pixelbender pli plsql postgresql postscript povray powerbuilder powershell proftpd progress prolog properties providex purebasic pycon pys60 python qbasic qml q racket rails rbs rebol reg rexx robots rpmspec rsplus ruby rust sas sass scala scheme scilab scl sdlbasic smalltalk smarty spark sparql sql standardml stonescript swift systemverilog tclegg tcl teraterm texgraph text thinbasic tsql twig typoscript unicon upc urbi uscript vala vbnet vb vbscript vedit verilog vhdl vim visualfoxpro visualprolog whitespace whois winbatch xbasic xml xojo xorg_conf xpp yaml z80 zxbasic');
         // phpcs:enable
         $datalistHTML = '<datalist id="codelanguages">';
         foreach ($languages as $language) {
-            $datalistHTML .= "<option value=\"$language\">";
+            $datalistHTML .= '<option value="' . hsc($language) . '">';
         }
         $datalistHTML .= '</datalist>';
         echo $datalistHTML;
     }
 
     /**
-     * Provide the current smiley configuration to Javascript
+     * Provide the current smiley configuration to Javascript via JSINFO
+     *
+     * Triggered by event: ACTION_HEADERS_SEND (AFTER)
+     *
+     * @return void
      */
     public function addJSINFO()
     {
@@ -313,24 +327,23 @@ class action_plugin_prosemirror_editor extends ActionPlugin
     }
 
     /**
-     * Returns true if the current content is read only
+     * Returns true if the edit form's textarea is read-only
      *
-     * @todo remove Doku_Form case when the class is removed
+     * @param Form $form
      *
-     * @param $form
      * @return bool
      */
     protected function isReadOnly($form)
     {
         if (is_a($form, Form::class)) {
             $textareaPos = $form->findPositionByType('textarea');
-            $readonly = $textareaPos !== false && !empty($form->getElementAt($textareaPos)->attr('readonly'));
-        } else {
-            /** @var Doku_Form $form */
-            $textareaPos = $form->findElementByType('wikitext');
-            $readonly = $textareaPos !== false && !empty($form->getElementAt($textareaPos)['readonly']);
+            return $textareaPos !== false && !empty($form->getElementAt($textareaPos)->attr('readonly'));
         }
-        return $readonly;
+
+        // Legacy Doku_Form support
+        /** @var \Doku_Form $form */
+        $textareaPos = $form->findElementByType('wikitext');
+        return $textareaPos !== false && !empty($form->getElementAt($textareaPos)['readonly']);
     }
 }
 

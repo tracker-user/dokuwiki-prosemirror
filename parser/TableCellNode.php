@@ -26,7 +26,6 @@ class TableCellNode extends Node
             try {
                 $newNode = static::getSubNode($nodeData, $this, $previousNode);
             } catch (\Throwable $e) {
-                var_dump($nodeData);
                 throw $e;
             }
             $this->subnodes[] = $newNode;

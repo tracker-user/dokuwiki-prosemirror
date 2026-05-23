@@ -2,17 +2,32 @@
 
 namespace dokuwiki\plugin\prosemirror\parser;
 
+/**
+ * Code block node — maps to DokuWiki <code> syntax
+ */
 class CodeBlockNode extends Node
 {
+    /** @var Node */
     protected $parent;
+
+    /** @var array */
     protected $data;
 
+    /**
+     * @param array $data
+     * @param Node  $parent
+     */
     public function __construct($data, Node $parent)
     {
-        $this->parent = &$parent;
-        $this->data = $data;
+        $this->parent = $parent;
+        $this->data   = $data;
     }
 
+    /**
+     * Return the DokuWiki <code> syntax for this node
+     *
+     * @return string
+     */
     public function toSyntax()
     {
         $openingTag = '<code';
@@ -25,6 +40,10 @@ class CodeBlockNode extends Node
             $openingTag .= ' ' . $this->data['attrs']['data-filename'];
         }
         $openingTag .= '>';
-        return $openingTag . "\n" . $this->data['content'][0]['text'] . "\n</code>";
+
+        // Guard against missing or empty content array
+        $text = $this->data['content'][0]['text'] ?? '';
+
+        return $openingTag . "\n" . $text . "\n</code>";
     }
 }

@@ -1,4 +1,5 @@
 <?php
+if (!defined('DOKU_INC')) die();
 
 use dokuwiki\Extension\Plugin;
 use dokuwiki\plugin\prosemirror\parser\SyntaxTreeBuilder;
