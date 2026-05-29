@@ -120,6 +120,15 @@ The plugin is built in four layers:
 3. **Parser** (`parser/`): Converts ProseMirror JSON → DokuWiki syntax (30+ node types)
 4. **Schema** (`schema/`): JSON node/mark representation matching ProseMirror spec
 
+## Plugin Support
+
+Other DokuWiki syntax plugins can integrate with the ProseMirror editor so their
+output renders visually instead of showing raw syntax code.
+
+See **[PROSEMIRROR_PLUGIN_SUPPORT.md](PROSEMIRROR_PLUGIN_SUPPORT.md)** for a
+step-by-step guide covering schema extension, renderer/parser hooks, nodeviews,
+menu items, and roundtrip safety.
+
 ## Performance
 
 - Bidirectional conversion is deterministic and repeatable
