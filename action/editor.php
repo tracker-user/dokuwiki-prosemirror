@@ -182,7 +182,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $linkForm->addTagOpen('div')->addClass('radio-wrapper');
         $linkForm->addTagOpen('fieldset');
         $linkForm->addTagOpen('legend');
-        $linkForm->addHTML('Link Type');
+        $linkForm->addHTML($this->getLang('legend:link type'));
         $linkForm->addTagClose('legend');
         $linkForm->addRadioButton('linktype', $this->getLang('type:wiki page'))->val('internallink');
         $linkForm->addRadioButton('linktype', $this->getLang('type:interwiki'))->val('interwikilink');
@@ -197,14 +197,14 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $linkForm->addTagOpen('div')->addClass('radio-wrapper');
         $linkForm->addTagOpen('fieldset');
         $linkForm->addTagOpen('legend');
-        $linkForm->addHTML('Link Name Type');
+        $linkForm->addHTML($this->getLang('legend:link name type'));
         $linkForm->addTagClose('legend');
         $linkForm->addRadioButton('nametype', $this->getLang('type:automatic title'))
             ->val('automatic')
             ->attr('checked', 'checked');
         $linkForm->addRadioButton('nametype', $this->getLang('type:custom title'))->val('custom');
         $linkForm->addRadioButton('nametype', $this->getLang('type:image'))->val('image');
-        $linkForm->addTextInput('linkname', 'Link name')
+        $linkForm->addTextInput('linkname', $this->getLang('label:link name input'))
             ->attr('placeholder', $this->getLang('placeholder:link name'));
         $linkForm->addTagOpen('div')->addClass('js-media-wrapper');
         $linkForm->addTagClose('div');
@@ -212,7 +212,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $linkForm->addTagClose('div');
 
         $linkForm->addFieldsetClose();
-        $linkForm->addButton('ok-button', 'OK')->attr('type', 'submit');
+        $linkForm->addButton('ok-button', $this->getLang('btn:ok'))->attr('type', 'submit');
         $linkForm->addButton('cancel-button', $this->getLang('cancel'))->attr('type', 'button');
 
         echo $linkForm->toHTML();
@@ -296,7 +296,7 @@ class action_plugin_prosemirror_editor extends ActionPlugin
         $mediaForm->addTagClose('div'); // end .image-properties
 
         $mediaForm->addFieldsetClose();
-        $mediaForm->addButton('ok-button', 'OK')->attr('type', 'submit');
+        $mediaForm->addButton('ok-button', $this->getLang('btn:ok'))->attr('type', 'submit');
         $mediaForm->addButton('cancel-button', $this->getLang('cancel'))->attr('type', 'button');
 
         echo $mediaForm->toHTML();

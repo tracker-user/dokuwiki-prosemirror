@@ -56,7 +56,8 @@ abstract class LinkNode extends Node implements InlineNodeInterface
         } elseif (!empty($this->attrs['image-id'])) {
             $imageAttrs = [];
             foreach ($this->attrs as $key => $value) {
-                @[$keyPrefix, $attrKey] = explode('-', $key, 2);
+                $parts = explode('-', $key, 2);
+                [$keyPrefix, $attrKey] = count($parts) === 2 ? $parts : [$parts[0], ''];
                 if ($keyPrefix === 'image') {
                     $imageAttrs[$attrKey] = $value;
                 }

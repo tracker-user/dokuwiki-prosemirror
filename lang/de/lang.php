@@ -105,3 +105,8 @@ $lang['js']['label:rss details'] = 'Zeige die Beschreibung des Eintrages';
 $lang['js']['label:rss refresh'] = 'Abfragerhythmus';
 
 $lang['js']['code_block_hint'] = '💡 Zum Verlassen drücken Sie STRG+Enter';
+
+$lang['legend:link type'] = 'Linktyp';
+$lang['legend:link name type'] = 'Titeltyp des Links';
+$lang['label:link name input'] = 'Linkname';
+$lang['btn:ok'] = 'OK';

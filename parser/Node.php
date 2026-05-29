@@ -77,7 +77,7 @@ abstract class Node implements NodeInterface
             return $eventData['newNode'];
         } catch (\Error $e) {
             $exception = new ProsemirrorException(
-                'FIXME: better message for general error! Invalid node type received: ' . $node['type'],
+                'Unexpected error while creating node of type: ' . $node['type'],
                 0,
                 $e
             );

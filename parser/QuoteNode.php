@@ -15,12 +15,7 @@ class QuoteNode extends Node
 
         $previousNode = null;
         foreach ($data['content'] as $nodeData) {
-            try {
-                $newNode = self::getSubNode($nodeData, $this, $previousNode);
-            } catch (\Throwable $e) {
-                error_log("************ Unknown Node type: " . $nodeData['type'] . " ************");
-                throw $e;
-            }
+            $newNode = self::getSubNode($nodeData, $this, $previousNode);
             $this->subnodes[] = $newNode;
             $previousNode = $newNode;
         }

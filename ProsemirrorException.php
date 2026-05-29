@@ -11,18 +11,24 @@ namespace dokuwiki\plugin\prosemirror;
  */
 class ProsemirrorException extends \RuntimeException
 {
-    public $data = [];
+    /** @var array<string, mixed> */
+    protected array $data = [];
 
     /**
      * @param string $key
-     * @param mixed $data
+     * @param mixed  $data
+     *
+     * @return void
      */
     public function addExtraData($key, $data)
     {
         $this->data[$key] = $data;
     }
 
-    public function getExtraData()
+    /**
+     * @return array<string, mixed>
+     */
+    public function getExtraData(): array
     {
         return $this->data;
     }

@@ -105,3 +105,8 @@ $lang['js']['label:rss details'] = 'Show the item description';
 $lang['js']['label:rss refresh'] = 'Refresh period';
 
 $lang['js']['code_block_hint'] = '💡 Press CTRL+Enter to exit';
+
+$lang['legend:link type'] = 'Link Type';
+$lang['legend:link name type'] = 'Link Name Type';
+$lang['label:link name input'] = 'Link name';
+$lang['btn:ok'] = 'OK';

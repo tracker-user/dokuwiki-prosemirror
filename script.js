@@ -130,7 +130,7 @@ function toggleEditor() {
             showProsemirror(data.json);
         }
     }).fail(function (jqXHR, textStatus, errorThrown) {
-        console.error(jqXHR, textStatus, errorThrown); // FIXME: proper error handling
+        console.error(jqXHR, textStatus, errorThrown);
         if (jqXHR.responseJSON && jqXHR.responseJSON.error) {
             showErrorMessage(jqXHR.responseJSON.error);
         } else {

@@ -1,6 +1,6 @@
-# ProseMirror Plugin for DokuWiki
+# ProseMirror Plugin for DokuWiki — local fork
 
-A WYSIWYG editor for DokuWiki powered by [ProseMirror](http://prosemirror.net/).
+A WYSIWYG editor for DokuWiki powered by [ProseMirror](https://prosemirror.net).
 
 ## Features
 
@@ -40,9 +40,30 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](http://prosemirror.net/).
 - **forceWYSIWYG**: Force all non-admin users to use the WYSIWYG editor (default: off)
 - Additional configuration available via the DokuWiki admin panel
 
-## Recent Changes (v2.0.0+)
+## Recent Changes
 
-### Bug Fixes
+### v2.1.0
+
+#### Bug Fixes
+- **`@` error suppression removed** in `LinkNode`: replaced `@[$a, $b] = explode(...)` with explicit safe destructuring
+- **`in_array` strict mode**: added `true` third argument in `renderer.php` to prevent type-coercion bugs
+- **`error_log` debug output removed** from `QuoteNode`: no longer writes to PHP error log on unknown node types
+- **Hardcoded English strings extracted** from link/media forms in `editor.php` to `lang/en/lang.php`
+
+#### Modernization (PHP 8.3)
+- `jsonSerialize(): mixed` return type added to `schema/Node` and `schema/Mark` — eliminates PHP 8.1+ deprecation notices
+- `ProsemirrorException::$data` typed as `protected array` with typed `getExtraData(): array` return
+- `conf/metadata.php`: `array()` syntax replaced with `[]`
+- Cleaned up resolved FIXME comments throughout codebase
+
+#### Translations
+- **German**: Added 4 new strings (`legend:link type`, `legend:link name type`, `label:link name input`, `btn:ok`)
+- **Russian**: Added 16 missing strings (link/caching legends, list/formatting labels, RSS labels)
+- **Japanese**: Full translation added (`lang/ja/lang.php` and `lang/ja/settings.php`)
+
+### v2.0.0
+
+#### Bug Fixes
 - **Null-safety guards**: Fixed crashes when rendering empty headings, code blocks, preformatted text, root documents, and tables
 - **HeadingNode**: Now safely handles missing or empty content arrays
 - **CodeBlockNode & PreformattedNode**: Added null-coalescing for missing content[0]
@@ -57,7 +78,7 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](http://prosemirror.net/).
 - **Page ID input**: Now properly sanitized via `cleanID()` instead of raw POST input
 - **Datalist escaping**: Fixed HTML injection in code-language `<option>` values
 
-### Modernization & Best Practices
+#### Modernization & Best Practices
 - Removed debug output: `var_dump()` and commented debug statements
 - Added **DOKU_INC security guards** to all plugin entry points (non-namespaced files)
 - Added comprehensive docblocks to all public methods
@@ -65,12 +86,12 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](http://prosemirror.net/).
 - Strict array comparisons in conditional logic (`in_array(..., true)`)
 - Fixed method name typo: `addAddtionalForms` → `addAdditionalForms`
 
-### Firefox 78 Compatibility
+#### Firefox 78 Compatibility
 - Verified full compatibility with Firefox 78 ESR
 - No deprecated features used: no `#private` fields, no `??=`/`||=`/`&&=`, no `structuredClone`, no `Array.at`, no `Object.hasOwn`
 - Safe use of: optional chaining (`?.`), nullish coalescing (`??`), `async/await`, `IntersectionObserver`, `fetch`, `Map/Set`
 
-### Testing
+#### Testing
 - **93 assertions** covering:
   - Plugin loading (helper, renderer initialization)
   - Renderer output for all 30+ node types and marks
@@ -115,10 +136,10 @@ The plugin is built in four layers:
 
 ## License
 
-GPL 2 http://www.gnu.org/licenses/gpl-2.0.html
+GPL 2
 
 ## Author
 
 Andreas Gohr <gohr@cosmocode.de>
 
-Additional fixes and modernization by Claude (2025)
+Additional fixes and modernization by Claude Opus & Sonnet

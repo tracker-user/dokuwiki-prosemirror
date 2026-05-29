@@ -75,8 +75,6 @@ class renderer_plugin_prosemirror extends Doku_Renderer
         }
     }
 
-    // FIXME implement all methods of Doku_Renderer here
-
     /** @inheritDoc */
     public function document_start()
     {
@@ -308,7 +306,7 @@ class renderer_plugin_prosemirror extends Doku_Renderer
 
         $parentNode = $this->nodestack->current()->getType();
 
-        if (in_array($parentNode, ['paragraph', 'footnote'])) {
+        if (in_array($parentNode, ['paragraph', 'footnote'], true)) {
             $text = str_replace("\n", ' ', $text);
         }
 
@@ -588,7 +586,7 @@ class renderer_plugin_prosemirror extends Doku_Renderer
     /** @inheritDoc */
     public function entity($entity)
     {
-        $this->cdata($entity); // FIXME should we handle them special?
+        $this->cdata($entity);
     }
 
     /** @inheritDoc */
@@ -636,7 +634,7 @@ class renderer_plugin_prosemirror extends Doku_Renderer
     /** @inheritDoc */
     public function camelcaselink($link)
     {
-        $this->cdata($link); // FIXME should/could we decorate it?
+        $this->cdata($link);
     }
 
     #endregion

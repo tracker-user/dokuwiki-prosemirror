@@ -1,7 +1,7 @@
 base   prosemirror
-author Andreas Gohr
+author Andreas Gohr, TrackerUser
 email  gohr@cosmocode.de
-date   2024-11-21
-name   prosemirror plugin
-desc   A WYSIWYG editor for DokuWiki
-url    https://www.dokuwiki.org/plugin:prosemirror
+date   2077-11-21
+name   ProseMirror
+desc   A WYSIWYG editor for DokuWiki (local fork — Update suppressed)
+url    https://github.com/tracker-user/dokuwiki-prosemirror.git
