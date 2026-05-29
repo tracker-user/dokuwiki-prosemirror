@@ -84,6 +84,11 @@ class renderer_plugin_prosemirror extends Doku_Renderer
     /** @inheritDoc */
     public function document_end()
     {
+        // Drop spurious empty top-level paragraphs (artifacts of whitespace-only
+        // content between block elements, e.g. between unintegrated plugin tags).
+        // Done before the isEmpty() guard so a document left empty by this still
+        // gets its mandatory placeholder paragraph.
+        $this->nodestack->getDocNode()->removeEmptyChildParagraphs();
         if ($this->nodestack->isEmpty()) {
             $this->p_open();
             $this->p_close();

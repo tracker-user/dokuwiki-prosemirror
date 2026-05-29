@@ -46,6 +46,7 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](https://prosemirror.net).
 
 #### Bug Fixes
 - **Whitespace-only plugin matches no longer create junk nodes**: `renderer.php::plugin()` now skips matches whose content is entirely whitespace. Previously, stray newlines between unintegrated plugin tags (e.g. `<searchtable>…<sortable>`) were each wrapped in a separate `dwplugin_block`, and `RootNode`'s `\n\n` separator would add more whitespace fragments on every editor round-trip — causing an extra block to appear in the visual editor on each syntax↔visual toggle. With this fix the node count is stable across round-trips.
+- **Spurious empty top-level paragraphs removed**: `document_end()` now drops empty paragraphs that are direct children of the document (via `Node::removeEmptyChildParagraphs()`). These were left behind when an enclosing `<p>`'s only content was whitespace skipped by the fix above — they showed as blank lines in the visual editor and grew with each toggle. Structurally-required empty paragraphs (inside table cells, list items) are children of those nodes, not the document, so they are preserved; the mandatory placeholder paragraph for an otherwise-empty document is still added.
 
 ### v2.1.0
 

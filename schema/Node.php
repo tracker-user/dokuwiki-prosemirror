@@ -143,6 +143,29 @@ class Node implements \JsonSerializable
     }
 
     /**
+     * Remove direct child paragraphs that carry no content.
+     *
+     * Empty paragraphs at this level are whitespace artifacts — e.g. the
+     * enclosing <p> of plugin output whose only content was whitespace skipped
+     * by the renderer. They render as spurious blank lines in the editor and,
+     * because RootNode re-spaces top-level blocks, accumulate on every
+     * syntax<->visual round-trip. Paragraphs that are structurally required
+     * (inside table cells, list items, …) are children of those nodes, not of
+     * this one, so they are left untouched.
+     *
+     * @return void
+     */
+    public function removeEmptyChildParagraphs()
+    {
+        $this->content = array_values(array_filter(
+            $this->content,
+            static function (Node $child) {
+                return !($child->getType() === 'paragraph' && !$child->hasContent());
+            }
+        ));
+    }
+
+    /**
      * Trim all whitespace from the beginning of this node's content
      *
      * If this is a text-node then this node's text is left-trimmed
