@@ -1,926 +1,838 @@
 # Adding Plugin Support to ProseMirror
 
 This guide explains how to make a DokuWiki syntax plugin render properly in the
-ProseMirror WYSIWYG editor instead of showing raw syntax code.
+ProseMirror WYSIWYG editor instead of showing its raw syntax as text.
 
 **Note:** The prosemirror plugin's extension API is in ALPHA state and may change.
+This is a **local fork**, so modifying the prosemirror plugin's own files is an
+acceptable and sometimes necessary approach (see Path B).
 
-**Plugins with existing Prosemirror support** (for reference implementations):
+**Plugins with existing upstream Prosemirror support** (reference implementations):
 ImgPaste, Diagrams, CatMenu, VisualIndex.
+
+---
+
+## Two Integration Paths
+
+There are two fundamentally different ways to integrate, and **which one you need
+is dictated by the plugin's behavior, not by preference.**
+
+### Path A — Public-API bridge (upgrade-safe, no core changes)
+
+Works entirely through the published event + JS API. All the code lives **inside
+the target plugin**; the prosemirror plugin's files are untouched. Use this when
+the plugin produces **self-contained output** — a block or inline atom that
+replaces its syntax (include, gallery, RSS-like substitutions, info boxes, etc.).
+
+### Path B — Core modifications (edit prosemirror's own files)
+
+Required when the plugin's output cannot be expressed as a self-contained node.
+Two important cases fall here:
+
+- **Inline wrappers / marks with attributes** (e.g. **typography** `<fc #f00>…</fc>`):
+  these are ProseMirror *marks*, and a mark that carries an attribute (the color)
+  cannot be produced through the public API — the renderer's `$marks` array is
+  `protected` and `cdata()` builds marks **without** attributes. You must edit
+  `renderer.php` and `parser/Mark.php`.
+
+- **Attributes on an existing node** (e.g. **cellbg** `@color:` colouring a table
+  cell): the renderer offers no public way to reach the *parent* cell node, and the
+  table cell's schema attributes are defined inside `schema.js`. You must edit
+  `schema/NodeStack.php`, `schema.js`, and `parser/TableCellNode.php`.
+
+### Routing table
+
+| Plugin behaviour | ProseMirror primitive | Path |
+|------------------|-----------------------|------|
+| Standalone block replaced by rendered output (include, gallery) | block node (`atom`) | A |
+| Standalone inline token | inline node (`atom`) | A |
+| Wraps inline text with formatting, **no** attributes | mark | B (renderer `$marks` is protected) |
+| Wraps inline text with formatting, **with** attributes (typography) | mark + attrs | B |
+| Adds/changes an attribute on a built-in node (cellbg → table cell) | node attribute | B |
+
+> Even an attribute-less wrapper needs Path B, because there is no public setter
+> for the renderer's mark stack. Path A genuinely covers only self-contained nodes.
+
+---
 
 ## Architecture Overview
 
-### Data Flow
-
-When a page is edited in ProseMirror, three conversions happen:
+### Data flow
 
 ```
 Wiki Syntax  --(PHP renderer)-->  ProseMirror JSON  --(JS schema)-->  Editor DOM
 Editor DOM   --(JS state)------>  ProseMirror JSON  --(PHP parser)-->  Wiki Syntax
 ```
 
-1. **Wiki Syntax to JSON (PHP):** DokuWiki parses the text into instructions, then
-   the prosemirror renderer (`renderer.php`) builds a tree of `schema\Node` objects
-   and serializes to JSON. For syntax plugins, the `plugin()` method fires a
-   `PROSEMIRROR_RENDER_PLUGIN` event, then defaults to wrapping the raw match in
-   a generic `dwplugin_inline` or `dwplugin_block` node (displayed as `<code>`).
+1. **Wiki syntax → JSON (PHP).** DokuWiki parses text into instructions; the
+   prosemirror renderer (`renderer.php`) builds a tree of `schema\Node` objects and
+   serializes to JSON. For syntax plugins, `plugin()` fires the
+   `PROSEMIRROR_RENDER_PLUGIN` event, then otherwise wraps the raw match in a generic
+   `dwplugin_inline` / `dwplugin_block` node (shown as `<code>` — this is the "raw
+   syntax as text" you currently see).
 
-2. **JSON to Editor (JS):** `schema.js` defines allowed ProseMirror node/mark types.
-   `dwplugin_inline` and `dwplugin_block` are catch-all types that display raw syntax.
-   NodeViews customize DOM rendering. The schema, nodeviews, and menu items are
-   extensible via `window.Prosemirror.*` hooks.
+2. **JSON → editor (JS).** `script/schema.js` defines the allowed node/mark types.
+   NodeViews customise DOM rendering. Schema, nodeviews and menu items are extensible
+   via `window.Prosemirror.*` hooks.
 
-3. **JSON to Wiki Syntax (PHP):** `parser\Node::getSubNode()` maps JSON node types to
-   PHP parser classes. For unknown types, fires `PROSEMIRROR_PARSE_UNKNOWN`.
-   `PluginNode` handles the generic `dwplugin_*` types by returning the text verbatim.
+3. **JSON → wiki syntax (PHP).** `parser\Node::getSubNode()` maps JSON node types to
+   PHP parser classes. Unknown types fire `PROSEMIRROR_PARSE_UNKNOWN`. The generic
+   `dwplugin_*` types are handled by `PluginNode`, which emits the text verbatim.
 
-### Extension Points
+### Extension points
 
-**PHP events (in `prosemirror/` plugin code):**
+**PHP events:**
 
-| Event | When | Purpose |
-|-------|------|---------|
-| `PROSEMIRROR_RENDER_PLUGIN` | Rendering wiki syntax to JSON | Override default `dwplugin_*` wrapping |
-| `PROSEMIRROR_PARSE_UNKNOWN` | Parsing JSON back to wiki syntax | Handle custom node types |
+| Event | Fires in | Purpose |
+|-------|----------|---------|
+| `PROSEMIRROR_RENDER_PLUGIN` | `renderer.php::plugin()` | Build JSON for your syntax |
+| `PROSEMIRROR_PARSE_UNKNOWN` | `parser/Node.php::getSubNode()` | Rebuild syntax from your JSON node |
 
-**JS global API (`window.Prosemirror`, available after `PROSEMIRROR_API_INITIALIZED`):**
+`PROSEMIRROR_RENDER_PLUGIN` data:
+
+```php
+[
+    'name'     => string,   // plugin/component name, e.g. 'typography_fontcolor', 'cellbg'
+    'data'     => mixed,    // whatever your syntax plugin's handle() returned
+    'state'    => int,      // DOKU_LEXER_ENTER | _EXIT | _SPECIAL | _MATCHED ...
+    'match'    => string,   // the raw matched text
+    'renderer' => renderer_plugin_prosemirror,
+]
+```
+
+`PROSEMIRROR_PARSE_UNKNOWN` data:
+
+```php
+[
+    'node'     => array,      // JSON node: type, attrs, content, marks
+    'parent'   => parser\Node,
+    'previous' => parser\Node | null,
+    'newNode'  => null,       // YOU set this to your parser\Node instance
+]
+```
+
+In both handlers you must call `$event->preventDefault()` and (for parsing) assign
+`$event->data['newNode']`.
+
+**JS global API** (`window.Prosemirror`, ready after `PROSEMIRROR_API_INITIALIZED`):
 
 | Property | Type | Purpose |
 |----------|------|---------|
 | `pluginSchemas` | `Function[]` | Each receives `(nodes, marks)` OrderedMaps, returns `{nodes, marks}` |
-| `pluginNodeViews` | `Object` | Map of node type name to nodeview constructor function |
-| `pluginMenuItemDispatchers` | `Array` | Menu item dispatchers added to the Plugin dropdown |
-| `classes.KeyValueForm` | Class | Reusable form dialog for editing node attributes |
-| `classes.MenuItem` | Class | Menu item constructor |
-| `classes.AbstractMenuItemDispatcher` | Class | Base class for menu item dispatchers |
-| `classes.DOMParser` | Class | ProseMirror's DOMParser for clipboard paste handling |
-| `commands.setBlockTypeNoAttrCheck` | Function | Block-type command that skips attribute comparison |
+| `pluginNodeViews` | `Object` | Map of node-type name → nodeview constructor |
+| `pluginMenuItemDispatchers` | `Array` | Dispatchers added **inside the "Plugins" (puzzle) dropdown** |
+| `classes.KeyValueForm` | Class | Reusable jQuery-UI form dialog for editing attributes |
+| `classes.MenuItem` | Class | Menu-item constructor |
+| `classes.AbstractMenuItemDispatcher` | Class | Base for menu-item dispatchers |
+| `classes.DOMParser` | Class | ProseMirror DOMParser (clipboard paste) |
+| `commands.setBlockTypeNoAttrCheck` | Function | Block-type command skipping attr comparison |
 
-**JS event:**
-- `PROSEMIRROR_API_INITIALIZED` (jQuery on `document`) fires after the API is ready
-  but before the editor is constructed. This is the correct time to push to
-  `pluginSchemas`, `pluginNodeViews`, and `pluginMenuItemDispatchers`.
+`window.AbstractNodeView` is also exposed (as a side-effect global, not under
+`classes`) for nodeviews to extend.
+
+**JS event:** `PROSEMIRROR_API_INITIALIZED` (jQuery, on `document`) fires after the
+API object exists but before the editor is built. Register all JS extensions here.
 
 ### Timing
 
-The prosemirror `script.js` is auto-bundled by DokuWiki globally. It includes
-`bundle.js` via `DOKUWIKI:include`. The load order is:
+`prosemirror/script.js` is auto-bundled globally and includes `lib/bundle.js`. Order:
 
-1. `bundle.js` runs `initializePublicAPI()` which creates `window.Prosemirror.*`
-   and triggers `PROSEMIRROR_API_INITIALIZED`
-2. Other plugins' `script.js` files run (in plugin-name alphabetical order)
-3. When the user opens the editor, `enableProsemirror()` builds the schema by
-   calling `getSpec()`, which iterates `window.Prosemirror.pluginSchemas`
-4. NodeViews are collected via `getNodeViews()`, which spreads
-   `window.Prosemirror.pluginNodeViews`
-5. Menu items are collected via `MenuInitializer.collectMenuItems()`, which
-   includes `window.Prosemirror.pluginMenuItemDispatchers`
+1. `bundle.js` runs `initializePublicAPI()` → creates `window.Prosemirror.*`, triggers
+   `PROSEMIRROR_API_INITIALIZED`.
+2. Other plugins' `script.js` files run.
+3. On editor open, `enableProsemirror()` calls `getSpec()`, which runs every
+   `pluginSchemas` callback.
+4. `getNodeViews()` spreads `pluginNodeViews`.
+5. `MenuInitializer.collectMenuItems()` folds `pluginMenuItemDispatchers` into the
+   Plugins dropdown.
 
-Your plugin's `script.js` must listen for `PROSEMIRROR_API_INITIALIZED` to
-register its extensions, since the API object may not exist at script load time.
+> **Your plugin's `script.js` is shipped to the browser untranspiled** (only
+> prosemirror's own `bundle.js` goes through Babel). It must satisfy the Firefox 78
+> floor — but ES6 that FF78 supports (`const`/`let`, arrow functions, classes,
+> `?.`, `??`, `Map`/`Set`, template literals) is fine. See the JS Compatibility
+> section.
 
-### Required and Optional Aspects
-
-To add support for your plugin, you must implement three things:
-
-1. **The schema** (JS) - define your node/mark types
-2. **The renderer** (PHP) - convert wiki syntax to ProseMirror JSON
-3. **The parser** (PHP) - convert ProseMirror JSON back to wiki syntax
-
-Optional enhancements:
-
-4. **NodeView** (JS) - custom DOM rendering for your nodes
-5. **Menu items** (JS) - toolbar buttons for creating/editing your syntax
-6. **Keybindings** (JS) - keyboard shortcuts (e.g., Ctrl+B for bold)
-7. **Input rules** (JS) - auto-formatting as the user types
+---
 
 ## OrderedMap API
 
-The `nodes` and `marks` parameters in schema callbacks are **OrderedMap** instances,
-not plain objects or arrays. Key methods:
+The `nodes` and `marks` arguments to schema callbacks are **OrderedMap** instances
+(persistent/immutable — every method returns a *new* map), not plain objects.
 
 | Method | Description |
 |--------|-------------|
-| `get(key)` | Get value by key, or `undefined` |
-| `update(key, value, newKey?)` | Replace or add a binding; optionally rename |
-| `remove(key)` | Return new map without the key |
+| `get(key)` | Value by key, or `undefined` |
+| `update(key, value, newKey?)` | Replace/add a binding; optionally rename |
+| `remove(key)` | New map without the key |
 | `addToStart(key, value)` | Insert at the beginning |
-| `addToEnd(key, value)` | Append to the end |
-| `addBefore(place, key, value)` | Insert before `place`; appends if `place` not found |
-| `forEach(fn)` | Iterate: `fn(key, value)` |
-| `append(map)` | Append non-overlapping keys from `map` |
-| `prepend(map)` | Prepend non-overlapping keys from `map` |
+| `addToEnd(key, value)` | Append at the end |
+| `addBefore(place, key, value)` | Insert before `place` (appends if not found) |
+| `forEach(fn)` | Iterate `fn(key, value)` in order |
+| `append(map)` / `prepend(map)` | Merge non-overlapping keys after/before |
 | `subtract(map)` | Remove keys present in `map` |
-| `size` | Number of entries |
+| `size` | Entry count |
 
-Common usage in schema callbacks:
+Typical usage:
 
 ```javascript
 window.Prosemirror.pluginSchemas.push(function (nodes, marks) {
-    // Add a new node type
+    // add a new node type
     nodes = nodes.addToEnd('mynode', { /* NodeSpec */ });
 
-    // Modify an existing node type
-    var existing = nodes.get('table_cell');
-    existing.attrs.myattr = { default: null };
-    nodes = nodes.update('table_cell', existing);
+    // modify an existing type (must re-assign — maps are immutable)
+    var cell = nodes.get('table_cell');
+    cell.attrs.background = { default: null };
+    nodes = nodes.update('table_cell', cell);
 
-    // Add a new mark type
+    // add a mark
     marks = marks.addToEnd('mymark', { /* MarkSpec */ });
-
-    // Remove a type
-    marks = marks.remove('unwanted_mark');
 
     return { nodes: nodes, marks: marks };
 });
 ```
 
-## Decision: Mark vs Node
+---
 
-Choose the ProseMirror primitive based on the plugin's behavior:
+## NodeSpec / MarkSpec reference
 
-### Use a Mark when:
-- The plugin wraps inline text: `<tag param>content</tag>`
-- Content inside can have nested formatting
-- Examples: typography (`<fc>`, `<fs>`, `<bg>`, `<typo>`), wrap, color
+### NodeSpec
 
-### Use a Node when:
-- The plugin produces standalone content (block or inline atom)
-- The plugin replaces content rather than wrapping it
-- Examples: include, gallery, struct, data entry
+| Property | Type | Description |
+|----------|------|-------------|
+| `content` | string | Content expression: `"text*"`, `"inline*"`, `"paragraph+"`, `"(a \| b)+"`, `"x{2,5}"` |
+| `marks` | string | `"_"` = all (default), `""` = none, `"strong em"` = specific |
+| `group` | string | Group name usable in content expressions |
+| `inline` | boolean | Inline vs block |
+| `atom` | boolean | Treated as a single, non-text-editable unit |
+| `code` | boolean | Content is code (no marks, monospace) |
+| `defining` | boolean | Type preserved when content is replaced |
+| `isolating` | boolean | Cursor can't cross the boundary with arrows |
+| `draggable` | boolean | Node can be dragged |
+| `attrs` | object | `{ name: { default: value } }`; no `default` ⇒ required |
+| `toDOM` | `fn(node)` | `["tag", {attr: val}, 0]`; `0` = content hole; omit for leaf/atom |
+| `parseDOM` | array | `[{ tag, style, getAttrs, priority }]` |
 
-### Special cases:
-- **cellbg** (`@color:`) modifies the parent table cell's attributes rather than
-  producing its own DOM. This is best handled as a table cell attribute set during
-  rendering, not as a separate node or mark.
+### MarkSpec
 
-## Implementation: Mark-Based Plugin
+| Property | Type | Description |
+|----------|------|-------------|
+| `attrs` | object | As NodeSpec |
+| `inclusive` | boolean | Default `true`; set `false` for link-like marks that shouldn't extend |
+| `excludes` | string | Space-separated incompatible marks; `"_"` = excludes all others |
+| `group` | string | Mark group |
+| `toDOM` | `fn(mark)` | `["span", {style:"…"}, 0]` |
+| `parseDOM` | array | `[{ tag/style, getAttrs }]` |
 
-This is the pattern for plugins like typography that wrap text with formatting.
-Example: `<fc #ff0000>red text</fc>` should show as red text in the editor.
+### parseDOM rule keys
 
-### Step 1: Create the bridge action plugin
+| Key | Meaning |
+|-----|---------|
+| `tag` | CSS selector (`"span.x"`, `"div[data-y]"`) |
+| `style` | CSS property name (`"color"`) |
+| `getAttrs` | `fn(dom)` → attrs object, or `false` to reject, or `null` to match with no attrs |
+| `priority` | default 50; higher checked first; use 60+ to beat built-in rules |
 
-Create `action.php` in your plugin (or add to existing) with two event handlers.
+---
+
+## Path A — Public-API bridge
+
+End-to-end example: a standalone block plugin with syntax `{{mything>param}}` that
+should appear in the editor as its rendered output. **No prosemirror core files are
+touched.** All files below live in *your* plugin (`mything/`).
+
+### A1. action.php — register
 
 ```php
-// In your plugin's action.php
+<?php
+if (!defined('DOKU_INC')) die();
+
 use dokuwiki\Extension\ActionPlugin;
 use dokuwiki\Extension\EventHandler;
 use dokuwiki\Extension\Event;
 use dokuwiki\plugin\prosemirror\schema\Node;
-use dokuwiki\plugin\prosemirror\schema\Mark;
 
-class action_plugin_YOURPLUGIN extends ActionPlugin
+class action_plugin_mything_prosemirror extends ActionPlugin
 {
     public function register(EventHandler $controller)
     {
-        // Only register if prosemirror is active
-        if (!plugin_load('renderer', 'prosemirror')) return;
-
-        $controller->register_hook(
-            'PROSEMIRROR_RENDER_PLUGIN', 'BEFORE', $this, 'handleRender'
-        );
-        $controller->register_hook(
-            'PROSEMIRROR_PARSE_UNKNOWN', 'BEFORE', $this, 'handleParse'
-        );
+        // No availability guard needed: if prosemirror is absent these
+        // events simply never fire.
+        $controller->register_hook('PROSEMIRROR_RENDER_PLUGIN', 'BEFORE', $this, 'handleRender');
+        $controller->register_hook('PROSEMIRROR_PARSE_UNKNOWN', 'BEFORE', $this, 'handleParse');
     }
 ```
 
-### Step 2: Handle rendering (Wiki Syntax to JSON)
+### A2. handleRender — wiki syntax → JSON
 
-The `PROSEMIRROR_RENDER_PLUGIN` event data contains:
+Uses **only public** renderer methods: `addToNodestack()`, `addToNodestackTop()`,
+`dropFromNodeStack()`, and the public `nodestack` property. Note that
+`clearBlock()` is *protected*, so the "close any open paragraph" step is replicated
+inline.
 
 ```php
-[
-    'name'     => string,  // plugin name (e.g. 'typography_fontcolor')
-    'data'     => array,   // data from handle() [state, tag_data, ...]
-    'state'    => string,  // lexer state constant
-    'match'    => string,  // raw matched text
-    'renderer' => renderer_plugin_prosemirror,
-]
+    public function handleRender(Event $event)
+    {
+        if ($event->data['name'] !== 'mything') return;
+
+        $renderer = $event->data['renderer'];
+
+        // Replicate the protected clearBlock(): close an open paragraph so the
+        // block node lands at doc level, not inside a <p>.
+        if ($renderer->nodestack->current()->getType() === 'paragraph') {
+            $renderer->nodestack->drop('paragraph');
+        }
+
+        $node = new Node('mything_block');
+        // Preserve the raw syntax verbatim — this is what guarantees a clean roundtrip.
+        $node->attr('syntax', $event->data['match']);
+
+        // Leaf/atom node → add() (addToNodestack), NOT addTop().
+        $renderer->addToNodestack($node);
+
+        $event->preventDefault();
+    }
 ```
 
-For a mark-based plugin, you add/remove marks on the renderer:
+### A3. Parser class — a real named class (not an anonymous class)
+
+`mything/MyThingBlockNode.php`, autoloaded as `dokuwiki\plugin\mything\MyThingBlockNode`:
+
+```php
+<?php
+namespace dokuwiki\plugin\mything;
+
+use dokuwiki\plugin\prosemirror\parser\Node;
+
+class MyThingBlockNode extends Node
+{
+    protected $syntax;
+
+    // Signature mirrors TableCellNode/RSSNode (Node $parent = null is accepted by getSubNode).
+    public function __construct($data, Node $parent = null)
+    {
+        $this->syntax = $data['attrs']['syntax'] ?? '';
+    }
+
+    public function toSyntax()
+    {
+        return $this->syntax;
+    }
+}
+```
+
+### A4. handleParse — JSON → wiki syntax
+
+```php
+    public function handleParse(Event $event)
+    {
+        if (($event->data['node']['type'] ?? '') !== 'mything_block') return;
+
+        $event->data['newNode'] = new \dokuwiki\plugin\mything\MyThingBlockNode(
+            $event->data['node']
+        );
+        $event->preventDefault();
+    }
+}
+```
+
+> `getSubNode()` accepts your node because, after `preventDefault()`,
+> `advise_before()` is false and `is_a($newNode, parser\Node::class)` is true.
+
+### A5. script.js — schema (public API)
+
+```javascript
+jQuery(document).on('PROSEMIRROR_API_INITIALIZED', function () {
+    window.Prosemirror.pluginSchemas.push(function (nodes, marks) {
+        nodes = nodes.addToEnd('mything_block', {
+            group: 'substitution_block',
+            atom: true,
+            attrs: {
+                syntax: { default: '' },
+                renderedHTML: { default: null },
+            },
+            toDOM: function (node) {
+                var dom = document.createElement('div');
+                dom.className = 'mything-node';
+                if (node.attrs.renderedHTML) {
+                    dom.innerHTML = node.attrs.renderedHTML;
+                } else {
+                    dom.textContent = node.attrs.syntax; // placeholder until resolved
+                }
+                return dom;
+            },
+        });
+        return { nodes: nodes, marks: marks };
+    });
+});
+```
+
+### A6. (Optional) NodeView with server-rendered preview
+
+To show real rendered HTML instead of a placeholder, add a nodeview that fetches it.
+The built-in `plugin_prosemirror` AJAX endpoint is **not** extensible (its `switch`
+ends in `default → 400`), so register **your own** `AJAX_CALL_UNKNOWN` handler.
+
+```javascript
+// in the same PROSEMIRROR_API_INITIALIZED handler
+window.Prosemirror.pluginNodeViews.mything_block = function (node, view, getPos) {
+    return new MyThingView(node, view, getPos);
+};
+```
+
+`MyThingView` follows `RSSView`: extend `window.AbstractNodeView`, in `renderNode()`
+check `attrs.renderedHTML`; if missing, `jQuery.post(DOKU_BASE + 'lib/exe/ajax.php',
+{ call: 'mything_render', syntax: attrs.syntax })` and on success
+`view.dispatch(view.state.tr.setNodeMarkup(getPos(), null, { ...attrs, renderedHTML }))`.
+
+Server side (your action.php):
+
+```php
+$controller->register_hook('AJAX_CALL_UNKNOWN', 'BEFORE', $this, 'ajaxRender');
+// ...
+public function ajaxRender(Event $event)
+{
+    if ($event->data !== 'mything_render') return;
+    $event->preventDefault();
+    $event->stopPropagation();
+    global $INPUT;
+    $syntax = $INPUT->str('syntax');
+    header('Content-Type: text/html; charset=utf-8');
+    echo p_render('xhtml', p_get_instructions($syntax), $info);
+}
+```
+
+---
+
+## Path B — Core modifications
+
+For cases the public API can't express. These edits go into the **prosemirror
+plugin's own files** (acceptable on this fork). Each recipe is minimal and
+backward-compatible.
+
+### B1. Marks with attributes — typography (`<fc #f00>…</fc>`)
+
+Three core files change, plus the JS schema (the schema part is still public API).
+
+**(1) `renderer.php` — public mark setters + attribute-aware `cdata()`**
+
+Add public entry points (the event handler can't touch the protected `$marks`):
+
+```php
+/**
+ * Push a formatting mark, optionally carrying attributes, onto the active stack.
+ *
+ * @param string $type  mark type (must match the JS schema mark name)
+ * @param array  $attrs attributes serialised onto every text node it covers
+ * @return void
+ */
+public function addPluginMark($type, array $attrs = [])
+{
+    $this->marks[$type] = $attrs ?: 1;
+}
+
+/**
+ * @param string $type
+ * @return void
+ */
+public function dropPluginMark($type)
+{
+    unset($this->marks[$type]);
+}
+```
+
+Make `cdata()` carry attributes (replace the existing mark loop). Backward
+compatible: existing `$this->marks['strong'] = 1` yields a non-array value and thus
+no attributes.
+
+```php
+foreach ($this->marks as $markType => $markData) {
+    $mark = new Mark($markType);
+    if (is_array($markData)) {
+        foreach ($markData as $key => $value) {
+            $mark->attr($key, $value);
+        }
+    }
+    $node->addMark($mark);
+}
+```
+
+**(2) `parser/Mark.php` — attribute-driven syntax + tolerant ordering**
+
+Custom marks aren't in the static `$openingMarks`/`$closingMarks`/`$markOrder`
+arrays. Prefer the literal syntax stored in attrs, and make `sort()` null-safe:
+
+```php
+public function getOpeningSyntax()
+{
+    if (isset($this->attrs['syntax_open'])) {
+        return $this->attrs['syntax_open'];
+    }
+    if ($this->type !== 'unformatted') {
+        return self::$openingMarks[$this->type] ?? '';
+    }
+    return $this->getUnformattedSyntax('opening');
+}
+
+public function getClosingSyntax()
+{
+    if (isset($this->attrs['syntax_close'])) {
+        return $this->attrs['syntax_close'];
+    }
+    if ($this->type !== 'unformatted') {
+        return self::$closingMarks[$this->type] ?? '';
+    }
+    return $this->getUnformattedSyntax('closing');
+}
+```
+
+In `sort()`, replace the two `self::$markOrder[...]` reads with
+`(self::$markOrder[...] ?? 50)` so an unregistered mark type doesn't warn.
+
+**(3) typography action handler** (`typography/action.php` or a new bridge action)
+
+The closing tag for typography is deterministic, so both syntaxes are known at ENTER:
 
 ```php
 public function handleRender(Event $event)
 {
-    $data = $event->data;
-    // Check if this event is for your plugin
-    if ($data['name'] !== 'typography_fontcolor') return;
+    if ($event->data['name'] !== 'typography_fontcolor') return;
 
-    $state = $data['data'][0] ?? null;
-    $renderer = $data['renderer'];
+    $renderer = $event->data['renderer'];
+    $state    = $event->data['data'][0] ?? null;
 
-    switch ($state) {
-        case DOKU_LEXER_ENTER:
-            // Extract the attribute (e.g. color value) from parsed data
-            $tagData = $data['data'][1] ?? [];
-            $color = $tagData['color'] ?? '';
-
-            // Push a mark with attributes onto the renderer's mark stack.
-            // The mark type name must match what you define in the JS schema.
-            $renderer->marks['typo_fontcolor'] = [
-                'color' => $color,
-                'syntax_open' => $data['match'],  // preserve original syntax
-            ];
-            break;
-
-        case DOKU_LEXER_EXIT:
-            // Record closing syntax before removing
-            if (isset($renderer->marks['typo_fontcolor'])) {
-                $renderer->marks['typo_fontcolor']['syntax_close'] = $data['match'];
-            }
-            unset($renderer->marks['typo_fontcolor']);
-            break;
+    if ($state === DOKU_LEXER_ENTER) {
+        $tagData = $event->data['data'][1] ?? [];   // CSS pairs from handle()
+        $renderer->addPluginMark('typo_fontcolor', [
+            'color'        => $tagData['color'] ?? '',
+            'syntax_open'  => $event->data['match'], // e.g. "<fc #ff0000>"
+            'syntax_close' => '</fc>',
+        ]);
+    } elseif ($state === DOKU_LEXER_EXIT) {
+        $renderer->dropPluginMark('typo_fontcolor');
     }
 
-    // Prevent default dwplugin wrapping
     $event->preventDefault();
 }
 ```
 
-**Important:** The renderer's `$marks` array is checked by `cdata()` — every
-text node created while a mark is active gets that mark attached. The mark type
-name you use here becomes the `type` field in the JSON mark object.
+> Inspect the real `handle()` output of the component to know the key
+> (`typography_parser::parse_inlineCSS()` returns CSS `property => value` pairs;
+> for `<fc>` that's `color`). When in doubt, store only `syntax_open`/`syntax_close`
+> for the roundtrip and use the CSS pairs purely for the editor's visual style.
 
-However, the default `cdata()` only creates `Mark` objects from the array keys
-(no attributes). For marks with attributes, you must intercept `cdata()` or
-produce custom mark objects. The simplest approach: since the renderer iterates
-`array_keys($this->marks)` and creates `new Mark($markType)` with no attrs,
-you need to override this behavior.
-
-**Recommended approach for marks with attributes:**
-
-Rather than fighting the renderer's mark system, use a direct approach in
-the PROSEMIRROR_RENDER_PLUGIN handler:
-
-```php
-case DOKU_LEXER_ENTER:
-    // Store mark data for later use. The cdata() method will
-    // not automatically handle attributes, so we track state manually.
-    $renderer->prosemirrorPluginMarks['typo_fontcolor'] = [
-        'attrs' => ['color' => $color],
-        'syntax_open' => $data['match'],
-    ];
-    break;
-```
-
-Then you also need to hook into text node creation. A simpler alternative is
-to use the renderer's existing mark mechanism and handle attributes in
-a custom way (see Approach B below).
-
-### Approach A: Custom mark with attributes (recommended for simple cases)
-
-When the mark only needs the opening/closing syntax preserved and has a visual
-CSS attribute (like color), the cleanest pattern is:
-
-1. Add the mark type to `$renderer->marks` (key only, value = 1)
-2. Store the opening syntax in a separate property on the renderer
-3. In the JS schema, define the mark with `toDOM` that applies the visual style
-4. In the PHP parser, read the mark's attrs and reconstruct the syntax
-
-For this to work, you need to extend how marks carry attributes. Since the
-`renderer.php`'s `cdata()` method creates `new Mark($markType)` with no attrs,
-and we need attributes, we must produce the text nodes ourselves:
-
-```php
-case DOKU_LEXER_ENTER:
-    $tagData = $data['data'][1] ?? [];
-    $color = $tagData['color'] ?? '';
-    // Store mark info on the renderer for use during text rendering
-    $renderer->marks['typo_fontcolor'] = 1;
-    // Store attributes separately
-    $renderer->prosemirrorMarkAttrs['typo_fontcolor'] = [
-        'color' => $color,
-        'syntax_open' => $data['match'],
-    ];
-    break;
-
-case DOKU_LEXER_EXIT:
-    $syntaxClose = $data['match'];
-    // Store closing syntax in attrs before removing
-    if (isset($renderer->prosemirrorMarkAttrs['typo_fontcolor'])) {
-        $renderer->prosemirrorMarkAttrs['typo_fontcolor']['syntax_close'] = $syntaxClose;
-    }
-    unset($renderer->marks['typo_fontcolor']);
-    unset($renderer->prosemirrorMarkAttrs['typo_fontcolor']);
-    break;
-```
-
-The problem: `cdata()` creates `new Mark($markType)` without attrs. You must
-also hook into text creation to attach attrs. Since the renderer doesn't provide
-a hook for this, the practical solution is:
-
-### Approach B: Treat as inline node (simpler, no bundle rebuild)
-
-For plugins where the formatted syntax is `<tag param>content</tag>`, represent
-the entire construct as a custom inline node with the rendered HTML stored as an
-attribute. This avoids modifying the mark system entirely:
-
-```php
-case DOKU_LEXER_ENTER:
-    $tagData = $data['data'][1] ?? [];
-    // Build the node and push it
-    $node = new Node('typo_fontcolor');
-    $node->attr('syntax_open', $data['match']);
-    // Parse and store CSS-relevant attrs
-    $color = $tagData['color'] ?? '';
-    $node->attr('color', $color);
-    $renderer->addToNodestackTop($node);
-    // Content will be added as children by subsequent cdata() calls
-    break;
-
-case DOKU_LEXER_EXIT:
-    $renderer->nodestack->current()->attr('syntax_close', $data['match']);
-    $renderer->dropFromNodeStack('typo_fontcolor');
-    break;
-```
-
-### Step 3: Define JS schema
-
-In your plugin's `script.js`:
+**(4) `script.js` — the mark in the JS schema (public API)**
 
 ```javascript
-jQuery(document).on('PROSEMIRROR_API_INITIALIZED', function () {
-    // 1. Add schema definition
-    window.Prosemirror.pluginSchemas.push(function (nodes, marks) {
-        // For a mark-based approach:
-        marks = marks.addToEnd('typo_fontcolor', {
-            attrs: {
-                color: { default: '' },
-                syntax_open: { default: '<fc>' },
-                syntax_close: { default: '</fc>' },
+window.Prosemirror.pluginSchemas.push(function (nodes, marks) {
+    marks = marks.addToEnd('typo_fontcolor', {
+        attrs: {
+            color:        { default: '' },
+            syntax_open:  { default: '<fc>' },
+            syntax_close: { default: '</fc>' },
+        },
+        toDOM: function (mark) {
+            return ['span', { style: 'color:' + mark.attrs.color }, 0];
+        },
+        parseDOM: [{
+            tag: 'span[style]',
+            getAttrs: function (dom) {
+                var c = dom.style.color;
+                return c ? { color: c } : false;
             },
-            // How to render in the editor
-            toDOM: function (mark) {
-                return ['span', { style: 'color: ' + mark.attrs.color }, 0];
-            },
-            // How to parse from pasted HTML
-            parseDOM: [{
-                tag: 'span[style]',
-                getAttrs: function (dom) {
-                    var color = dom.style.color;
-                    if (!color) return false;
-                    return { color: color };
-                },
-            }],
-        });
-
-        // For a node-based approach (Approach B):
-        nodes = nodes.addToEnd('typo_fontcolor', {
-            content: 'inline*',    // can contain text and inline nodes
-            marks: '_',            // allow all marks inside
-            inline: true,
-            group: 'inline',
-            attrs: {
-                color: { default: '' },
-                syntax_open: { default: '<fc>' },
-                syntax_close: { default: '</fc>' },
-            },
-            toDOM: function (node) {
-                return ['span', { style: 'color: ' + node.attrs.color }, 0];
-            },
-        });
-
-        return { nodes: nodes, marks: marks };
+        }],
     });
-
-    // 2. (Optional) Add a nodeview for custom rendering
-    // window.Prosemirror.pluginNodeViews.typo_fontcolor = function (node, view, getPos) {
-    //     return new MyCustomView(node, view, getPos);
-    // };
-
-    // 3. (Optional) Add menu items
-    // window.Prosemirror.pluginMenuItemDispatchers.push(MyMenuItemDispatcher);
+    return { nodes: nodes, marks: marks };
 });
 ```
 
-### Step 4: Handle parsing (JSON to Wiki Syntax)
+Roundtrip: the mark's `syntax_open`/`syntax_close` attrs ride along on every covered
+text node in the JSON; on parse, `Mark::getOpeningSyntax()/getClosingSyntax()` read
+them back verbatim.
 
-Register a handler for `PROSEMIRROR_PARSE_UNKNOWN`. The event data contains:
+### B2. Attribute on a built-in node — cellbg (`@color:` on a table cell)
 
-```php
-[
-    'node'     => array,     // the JSON node data (type, attrs, content, marks)
-    'parent'   => Node,      // parent parser node
-    'previous' => Node|null, // previous sibling (for inline mark tracking)
-    'newNode'  => null,      // set this to your Node instance
-]
-```
+cellbg colours the **enclosing table cell**. Four edits.
 
-You must: (1) prevent the default, (2) set `newNode` to your `Node` instance:
+**(1) `schema/NodeStack.php` — expose the parent node**
+
+There is currently no way to reach the node *below* the top of the stack:
 
 ```php
-public function handleParse(Event $event)
+/**
+ * Return the node directly beneath the current one (its parent), or null.
+ *
+ * @return Node|null
+ */
+public function parent()
 {
-    $nodeData = $event->data['node'];
-    if ($nodeData['type'] !== 'typo_fontcolor') return;
-
-    $attrs = $nodeData['attrs'] ?? [];
-    $syntaxOpen = $attrs['syntax_open'] ?? '<fc>';
-    $syntaxClose = $attrs['syntax_close'] ?? '</fc>';
-
-    // Build inner content by recursing into children
-    $innerSyntax = '';
-    if (!empty($nodeData['content'])) {
-        foreach ($nodeData['content'] as $child) {
-            $childNode = \dokuwiki\plugin\prosemirror\parser\Node::getSubNode(
-                $child, $event->data['parent']
-            );
-            $innerSyntax .= $childNode->toSyntax();
-        }
+    if ($this->stacklength < 1) {
+        return null;
     }
-
-    // Create a custom node that returns the reconstructed syntax
-    $event->data['newNode'] = new class($syntaxOpen, $innerSyntax, $syntaxClose)
-        extends \dokuwiki\plugin\prosemirror\parser\Node
-    {
-        private $syntax;
-        public function __construct($open, $inner, $close)
-        {
-            $this->syntax = $open . $inner . $close;
-        }
-        public function toSyntax() { return $this->syntax; }
-    };
-
-    $event->preventDefault();
+    return $this->stack[$this->stacklength - 1];
 }
 ```
 
-### Step 5: Handle mark parsing (if using marks)
-
-If you used a mark rather than a node, the mark data appears on text nodes
-in the JSON. The existing `parser\Mark.php` handles known mark types via
-`$openingMarks` and `$closingMarks` arrays. For custom marks, you need to
-add entries or handle them in the `PROSEMIRROR_PARSE_UNKNOWN` event.
-
-Since marks are embedded in text nodes (not standalone nodes), you need to
-add your mark type to `parser\Mark.php`'s static arrays:
+**(2) cellbg action handler** — when `@color:` is rendered, the stack top is the
+cell's paragraph and its parent is the cell:
 
 ```php
-// In parser\Mark.php (must modify prosemirror plugin directly):
-protected static $openingMarks = [
-    // ... existing marks ...
-    'typo_fontcolor' => '<fc>',  // default, overridden by attrs
-];
-```
-
-This is why **Approach B (inline node)** is simpler for external plugins:
-it avoids modifying the prosemirror plugin's core files.
-
-## Implementation: Node-Based Plugin
-
-For plugins that produce block or inline content (not wrapping text).
-
-### Example: cellbg (`@color:`)
-
-cellbg is a special case: it modifies the parent table cell rather than
-producing its own visible content. It uses `DOKU_LEXER_SPECIAL`.
-
-```php
-// In action handler for PROSEMIRROR_RENDER_PLUGIN
 public function handleRender(Event $event)
 {
     if ($event->data['name'] !== 'cellbg') return;
 
-    $pluginData = $event->data['data'];
-    $color = $pluginData[1] ?? 'yellow';
     $renderer = $event->data['renderer'];
+    $color    = $event->data['data'][1] ?? 'yellow'; // handle() returns [state, color, match]
 
-    // Set background color on the current table cell node
-    $currentNode = $renderer->nodestack->current();
-    // Walk up to find the table_cell or table_header
-    // The current node is likely 'paragraph' inside a cell
-    $cellNode = $this->findParentCell($renderer);
-    if ($cellNode) {
-        $cellNode->attr('data-cellbg', $color);
-        $cellNode->attr('cellbg-syntax', $event->data['match']);
+    $cell = $renderer->nodestack->parent();
+    if ($cell && in_array($cell->getType(), ['table_cell', 'table_header'], true)) {
+        $cell->attr('background', $color);
     }
 
-    $event->preventDefault();
+    $event->preventDefault(); // don't emit the literal "@color:" text
 }
 ```
 
-For standalone block nodes (e.g., an include or gallery), the pattern is:
+**(3) `script.js` (or `schema.js`) — give cells a `background` attribute**
 
-```php
-case DOKU_LEXER_SPECIAL:
-    $renderer->clearBlock(); // close any open paragraph
-    $node = new Node('myplugin_block');
-    $node->attr('data-param1', $value1);
-    $node->attr('syntax', $data['match']); // preserve raw syntax for roundtrip
-    $renderer->addToNodestack($node);  // add() not addTop() for leaf nodes
-    break;
-```
-
-### JS schema for block nodes
+The cleanest place is the existing `tableNodes({ cellAttributes: { … } })` call in
+`schema.js`, using prosemirror-tables' intended `setDOMAttr` hook:
 
 ```javascript
-nodes = nodes.addToEnd('myplugin_block', {
-    group: 'substitution_block',  // or 'protected_block'
-    atom: true,                    // true if it has no editable content
-    attrs: {
-        'data-param1': { default: '' },
-        syntax: { default: '' },
-        renderedHTML: { default: null },  // for server-rendered preview
-    },
-    toDOM: function (node) {
-        if (node.attrs.renderedHTML) {
-            var wrapper = document.createElement('div');
-            wrapper.innerHTML = node.attrs.renderedHTML;
-            return wrapper;
+// inside tableNodes({ ... cellAttributes: { align: {…}, ... } })
+background: {
+    default: null,
+    setDOMAttr: function (value, attrs) {
+        if (value) {
+            attrs.style = (attrs.style || '') + 'background-color:' + value + ';';
         }
-        return ['div', { class: 'myplugin-placeholder' }, node.attrs.syntax];
     },
-});
+},
 ```
 
-### NodeView for server-rendered preview
+(Adding the attribute from a `pluginSchemas` callback is possible but risks clobbering
+prosemirror-tables' generated `toDOM`, which also emits colspan/rowspan/colwidth — so
+prefer the `cellAttributes` route here.)
 
-For complex plugins where the visual output can't be replicated in JS,
-fetch the rendered HTML from the server via AJAX:
+**(4) `parser/TableCellNode.php` — re-emit `@color:` from the attribute**
 
-```javascript
-window.Prosemirror.pluginNodeViews.myplugin_block = function (node, view, getPos) {
-    return new MyPluginView(node, view, getPos);
-};
-
-// MyPluginView follows the pattern of RSSView:
-// 1. Extend AbstractNodeView (exposed at window.AbstractNodeView)
-// 2. In renderNode(), check for renderedHTML attr
-// 3. If missing, POST to ajax.php to get rendered HTML
-// 4. Dispatch setNodeMarkup to store the result
-```
-
-You can add a custom AJAX action by hooking `AJAX_CALL_UNKNOWN` or by using
-the existing `plugin_prosemirror` AJAX endpoint if you add a handler.
-
-## Node Groups in the Schema
-
-The doc node accepts: `(block | baseonly | container | protected_block | substitution_block)+`
-
-| Group | Purpose | Examples |
-|-------|---------|----------|
-| `block` | Standard blocks | paragraph |
-| `baseonly` | Special top-level only | heading |
-| `container` | Blocks that contain other blocks | lists, tables, blockquote |
-| `protected_block` | Code-like blocks (no marks, `code: true`) | code_block, preformatted, dwplugin_block |
-| `substitution_block` | Atom blocks replaced by rendered content | rss |
-| `inline` | Inline elements | text, link, image, smiley, dwplugin_inline |
-
-List items accept: `(paragraph | protected_block | substitution_block)+`
-Table cells accept: `(paragraph | protected_block | substitution_block)+`
-
-## NodeSpec and MarkSpec Properties
-
-### NodeSpec (passed to `nodes.addToEnd()`)
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `content` | `string` | Content expression: what children are allowed. Regex-like: `"text*"`, `"paragraph+"`, `"(paragraph \| blockquote)+"`, `"inline{2,5}"` |
-| `marks` | `string` | Which marks are allowed: `"_"` = all (default), `""` = none, `"bold italic"` = specific marks |
-| `group` | `string` | Node group for use in content expressions (e.g., `"block"`, `"inline"`) |
-| `inline` | `boolean` | Whether this is an inline node |
-| `atom` | `boolean` | If `true`, node is treated as a single unit (not directly editable) |
-| `code` | `boolean` | If `true`, content is treated as code (no marks, monospace) |
-| `defining` | `boolean` | If `true`, node type is preserved when content is replaced |
-| `isolating` | `boolean` | If `true`, prevents cursor from entering/leaving via arrow keys |
-| `draggable` | `boolean` | If `true`, node can be dragged |
-| `attrs` | `object` | Attribute definitions: `{ attrName: { default: value } }`. Attrs without defaults are required |
-| `toDOM` | `function(node)` | Returns DOM spec: `["tag", { attr: val }, 0]` where `0` = content hole. Leaf nodes omit `0` |
-| `parseDOM` | `array` | Parse rules for pasting: `[{ tag: "div.myclass", getAttrs: fn, priority: 60 }]` |
-
-### MarkSpec (passed to `marks.addToEnd()`)
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `attrs` | `object` | Attribute definitions (same as NodeSpec) |
-| `inclusive` | `boolean` | If `true` (default), typing at the mark edge extends it. Set `false` for link-like marks |
-| `excludes` | `string` | Space-separated mark types that cannot coexist. `"_"` = excludes all other marks |
-| `group` | `string` | Mark group name |
-| `toDOM` | `function(mark)` | Returns DOM spec: `["span", { style: "color: red" }, 0]` |
-| `parseDOM` | `array` | Parse rules: `[{ tag: "span[style]", getAttrs: fn }, { style: "color", getAttrs: fn }]` |
-
-### Content expressions
-
-Content expressions use regex-like syntax with node type names and groups:
-
-- `"paragraph"` - exactly one paragraph
-- `"paragraph*"` - zero or more
-- `"paragraph+"` - one or more
-- `"(paragraph \| blockquote)+"` - one or more of either
-- `"heading paragraph+"` - heading followed by paragraphs
-- `"inline*"` - zero or more nodes from the `inline` group
-- `"text*"` - zero or more text nodes
-
-### parseDOM rule properties
-
-| Property | Description |
-|----------|-------------|
-| `tag` | CSS selector: `"div"`, `"span.myclass"`, `"p[data-type]"` |
-| `style` | CSS property name: `"color"`, `"font-size"` |
-| `getAttrs` | `function(dom)` returning attrs object, `false` to skip, or `null`/`undefined` to match |
-| `priority` | Number (default 50). Higher = checked first. Use 60+ to override default rules |
-
-## File Layout for a Prosemirror Bridge
-
-The bridge code lives inside the target plugin itself (not inside the
-prosemirror plugin directory). This way the bridge is only active when both
-the target plugin and prosemirror are installed.
-
-```
-yourplugin/
-  action.php        -- existing or new; add PROSEMIRROR_RENDER_PLUGIN
-                       and PROSEMIRROR_PARSE_UNKNOWN handlers
-  script.js         -- DokuWiki auto-bundles this globally; use it to
-                       register schema/nodeview/menu extensions
-  style.css         -- (optional) editor styles for your custom nodes
-```
-
-**No rebuild of the prosemirror bundle is required.** All extensions use the
-public API exposed via `window.Prosemirror`.
-
-### Guard your code
-
-Both PHP and JS bridge code must be guarded so it only runs when prosemirror
-is actually available:
-
-**PHP:**
 ```php
-public function register(EventHandler $controller)
+public function toSyntax()
 {
-    if (!plugin_load('renderer', 'prosemirror')) return;
-    $controller->register_hook('PROSEMIRROR_RENDER_PLUGIN', 'BEFORE', $this, 'handleRender');
-    $controller->register_hook('PROSEMIRROR_PARSE_UNKNOWN', 'BEFORE', $this, 'handleParse');
+    $prefix = $this->isHeaderCell() ? '^' : '|';
+
+    $doc = '';
+    foreach ($this->subnodes as $subnode) {
+        $doc .= $subnode->toSyntax();
+    }
+
+    $content = trim($doc);
+    if (!empty($this->data['attrs']['background'])) {
+        // cellbg pattern is ^@#?[0-9a-zA-Z]*: at the start of the cell
+        $content = '@' . $this->data['attrs']['background'] . ':' . $content;
+    }
+
+    [$paddingLeft, $paddingRight] = $this->calculateAlignmentPadding();
+    return $prefix . $paddingLeft . $content . $paddingRight;
 }
 ```
 
-**JS:**
-```javascript
-jQuery(document).on('PROSEMIRROR_API_INITIALIZED', function () {
-    // Safe: API exists
-    window.Prosemirror.pluginSchemas.push(function (nodes, marks) {
-        // ...
-        return { nodes: nodes, marks: marks };
-    });
-});
-```
+---
 
-## Adding Menu Items
+## Adding menu items
 
-To add toolbar buttons in the prosemirror editor, push dispatchers to
-`window.Prosemirror.pluginMenuItemDispatchers`.
+Items pushed to `pluginMenuItemDispatchers` are folded **into the "Plugins" (puzzle)
+dropdown** (`MenuInitializer.collectMenuItems()`), not placed as standalone toolbar
+buttons. A dispatcher is any object with `isAvailable(schema)` and
+`getMenuItem(schema)` (instance or static both work — they're duck-typed).
 
-### Toggle mark button (like bold/italic)
+### Insert a node
 
 ```javascript
 jQuery(document).on('PROSEMIRROR_API_INITIALIZED', function () {
     var MenuItem = window.Prosemirror.classes.MenuItem;
-    var AbstractMenuItemDispatcher = window.Prosemirror.classes.AbstractMenuItemDispatcher;
 
-    var MyMarkDispatcher = {
-        isAvailable: function (schema) {
-            return !!schema.marks.typo_fontcolor;
-        },
+    window.Prosemirror.pluginMenuItemDispatchers.push({
+        isAvailable: function (schema) { return !!schema.nodes.mything_block; },
         getMenuItem: function (schema) {
-            // Create an icon element (inline SVG or img)
             var icon = document.createElement('span');
-            icon.innerHTML = '<svg viewBox="0 0 24 24">...</svg>';
-
+            icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="…"/></svg>';
             return new MenuItem({
-                command: function (state, dispatch) {
-                    // Custom command: prompt for color, apply mark
-                    // Or use prosemirror-commands toggleMark if no prompt needed
-                    if (!state.selection.empty && dispatch) {
-                        var markType = schema.marks.typo_fontcolor;
-                        var color = prompt('Color:');
-                        if (color) {
-                            dispatch(state.tr.addMark(
-                                state.selection.from,
-                                state.selection.to,
-                                markType.create({ color: color })
-                            ));
-                        }
-                    }
-                    return true;
-                },
+                command: window.Prosemirror.commands.setBlockTypeNoAttrCheck(
+                    schema.nodes.mything_block,
+                    { syntax: '{{mything>default}}' }
+                ),
                 icon: icon,
-                label: 'Font Color',
+                label: 'My Thing',
             });
         },
-    };
-
-    window.Prosemirror.pluginMenuItemDispatchers.push(MyMarkDispatcher);
+    });
 });
 ```
 
-### Insert node button
+### Toggle a mark
 
-```javascript
-var MyNodeDispatcher = {
-    isAvailable: function (schema) {
-        return !!schema.nodes.myplugin_block;
-    },
-    getMenuItem: function (schema) {
-        return new MenuItem({
-            command: window.Prosemirror.commands.setBlockTypeNoAttrCheck(
-                schema.nodes.myplugin_block,
-                { syntax: '{{myplugin>default}}' }
-            ),
-            icon: myIcon,
-            label: 'My Plugin',
-        });
-    },
-};
-```
-
-### Using KeyValueForm for attribute editing
+For attribute-less toggles use prosemirror-commands' `toggleMark`. For an
+attributed mark (e.g. a colour), open a `KeyValueForm` and `addMark` on submit
+(`prompt()` works as a quick stand-in but isn't the established UX):
 
 ```javascript
 var KeyValueForm = window.Prosemirror.classes.KeyValueForm;
-
-// Create a form with fields
-var form = new KeyValueForm('Edit My Plugin', [
-    { label: 'URL', type: 'url', name: 'url', required: true, value: '' },
-    { label: 'Max Items', type: 'number', name: 'max', value: 5 },
-    {
-        label: 'Style', type: 'select', name: 'style',
-        options: [
-            { label: 'Default', value: 'default' },
-            { label: 'Compact', value: 'compact' },
-        ],
-    },
+var form = new KeyValueForm('Font colour', [
+    { label: 'Colour', type: 'color', name: 'color', value: '#ff0000' },
 ]);
-
-// Show the form as a jQuery UI dialog
-form.show();
-
-// Listen for submit
 form.on('submit', function (e) {
     e.preventDefault();
-    var attrs = form.$form.serializeArray().reduce(function (acc, item) {
-        acc[item.name] = item.value;
-        return acc;
-    }, {});
+    var attrs = form.$form.serializeArray().reduce(function (a, f) { a[f.name] = f.value; return a; }, {});
     form.hide();
-    // Use attrs to dispatch a transaction...
+    var view = window.Prosemirror.view;
+    var sel = view.state.selection;
+    if (!sel.empty) {
+        view.dispatch(view.state.tr.addMark(
+            sel.from, sel.to,
+            view.state.schema.marks.typo_fontcolor.create(attrs)
+        ));
+    }
 });
+form.show();
 ```
 
-## Keybindings and Input Rules
+---
 
-These are optional enhancements registered via the schema callback or
-separate plugin mechanisms.
+## Keybindings and input rules
 
-### Keybindings
+These are **not** currently extensible through the public API.
 
-ProseMirror keybindings are set via the `keymap` plugin. Since the prosemirror
-plugin doesn't expose its keymap for extension, you can add your own keymap
-plugin via the schema callback (the schema is built before plugins, but you
-can store a reference and add a plugin later). In practice, most plugin
-integrations rely on menu items rather than keybindings.
+- **Keybindings** live in `script/plugins/Keymap/keymap.js`; the keymap plugin is
+  constructed in `main.js` and not exposed for extension. Adding shortcuts means a
+  core change.
+- **Input rules** (auto-formatting as you type) live in
+  `script/plugins/InputRules/inputrules.js` and likewise require editing the bundle.
 
-### Input Rules
+Most integrations rely on menu items instead.
 
-Input rules auto-format text as the user types (e.g., `**text**` auto-applies
-bold). These are defined in the prosemirror plugin's `inputrules.js` and are
-not currently extensible via the public API. Custom input rules would require
-modifying the prosemirror bundle.
+---
 
-## Schema and Mark Type Naming
+## Roundtrip safety
 
-Use a prefix based on the plugin name to avoid collisions:
+Editing in ProseMirror must never lose or corrupt the plugin syntax.
 
-- Marks: `typo_fontcolor`, `typo_bgcolor`, `typo_fontsize`
-- Nodes: `cellbg_color`, `include_block`, `gallery_block`
+1. **Store the original syntax** in attrs (`syntax` for atoms; `syntax_open` /
+   `syntax_close` for marks/wrappers). Reconstruct from these rather than
+   regenerating from parsed parameters.
+2. **Handle every lexer state** your plugin emits (ENTER/EXIT for formatting,
+   SPECIAL for substitutions). A missing state drops syntax.
+3. **Test the roundtrip:** open a page using the syntax in ProseMirror, switch to the
+   syntax editor, and confirm the text is byte-for-byte preserved.
 
-## Parser Mark Integration
+---
 
-The prosemirror parser's `Mark.php` maintains static arrays mapping mark types
-to their DokuWiki opening/closing syntax. For custom marks added by external
-plugins, these arrays don't include your types.
+## Renderer / NodeStack API (visibility matters)
 
-**Options for handling custom marks during JSON-to-syntax parsing:**
-
-1. **Store syntax in mark attrs** (`syntax_open`, `syntax_close`). Then handle
-   the mark in `PROSEMIRROR_PARSE_UNKNOWN` or by extending `Mark.php`.
-
-2. **Use inline nodes instead of marks** (Approach B). Avoids the mark parsing
-   system entirely. The `PROSEMIRROR_PARSE_UNKNOWN` handler receives the full
-   node data including children.
-
-3. **Modify `parser\Mark.php`** to support dynamic mark registration. This
-   requires changing the prosemirror plugin itself.
-
-Option 2 is recommended for external plugin bridges because it requires no
-changes to the prosemirror plugin.
-
-## Roundtrip Safety
-
-The critical requirement: editing in ProseMirror must not corrupt or lose the
-plugin syntax. To ensure this:
-
-1. **Store the original syntax** in node/mark attrs (`syntax_open`, `syntax_close`,
-   or `syntax` for atoms). The parser reconstructs syntax from these attrs rather
-   than trying to regenerate it from parsed parameters.
-
-2. **Handle all lexer states** (ENTER, UNMATCHED, EXIT for formatting;
-   SPECIAL for substitutions). Missing states cause syntax loss.
-
-3. **Test the roundtrip:** Edit a page with the plugin syntax in ProseMirror,
-   switch to syntax editor, verify the syntax is preserved.
-
-## Renderer API Reference
-
-Key methods on `renderer_plugin_prosemirror` (available as `$event->data['renderer']`):
+`renderer_plugin_prosemirror` (via `$event->data['renderer']`):
 
 ```php
-// Node stack operations
-$renderer->nodestack                    // NodeStack instance
-$renderer->addToNodestack(Node $node)   // add as child of current
-$renderer->addToNodestackTop(Node $node) // add as child and push (for containers)
-$renderer->dropFromNodeStack($type)      // pop and verify type
-$renderer->getCurrentMarks()             // get active marks array
+// PUBLIC — safe from an external event handler
+$renderer->nodestack                      // NodeStack (public property)
+$renderer->addToNodestack(Node $node)     // add as child of current (leaf/atom)
+$renderer->addToNodestackTop(Node $node)  // add as child AND push (containers)
+$renderer->dropFromNodeStack($type)       // pop, verifying type
+$renderer->getCurrentMarks()              // returns a COPY of the marks array
 
-// Creating nodes
-$node = new Node('typename');
-$node->attr('key', 'value');
-$node->addChild($childNode);
-$node->setText('text content');  // only for text nodes
-$node->addMark(new Mark('marktype'));
-
-// Creating marks
-$mark = new Mark('typename');
-$mark->attr('key', 'value');
+// PROTECTED — NOT accessible externally (would fatal)
+$renderer->marks                          // use addPluginMark()/dropPluginMark() (Path B)
+$renderer->clearBlock()                   // replicate: drop 'paragraph' if current
 ```
 
-## JS Compatibility
+`NodeStack` (public methods): `current()`, `getDocNode()`, `doc()`, `add()`,
+`addTop()`, `drop($type)`, `isEmpty()`. There is **no** parent accessor until you add
+`parent()` (Path B / B2).
 
-All JS must work on Firefox 78 ESR. See CLAUDE.md for the full list, but key
-restrictions:
+`schema\Node`: `new Node($type)`, `->attr($k,$v?)`, `->addChild(Node)`,
+`->setText($s)` (text nodes only), `->addMark(Mark)`, `->getType()`, `->hasContent()`.
+`schema\Mark`: `new Mark($type)`, `->attr($k,$v?)`.
 
-- No `#privateField`, `??=`, `||=`, `&&=`
-- No `structuredClone()`, `.at()`, `Object.hasOwn()`
-- No native `<dialog>`/`showModal()`
-- Use `var` or `let`/`const`; avoid class private fields
-- `?.` and `??` are OK
-- jQuery is available as `jQuery` (not `$`)
+---
 
-## Step-by-Step Checklist
+## JS compatibility (Firefox 78 ESR floor)
 
-For each plugin you want to support:
+Your `script.js` ships untranspiled, so the source itself must be FF78-safe.
 
-1. [ ] Identify the plugin's syntax pattern(s) and lexer states
-2. [ ] Decide: mark, inline node, block node, or table-cell attribute
-3. [ ] In the plugin's `action.php`, add `PROSEMIRROR_RENDER_PLUGIN` handler
-4. [ ] In the plugin's `action.php`, add `PROSEMIRROR_PARSE_UNKNOWN` handler
-5. [ ] In the plugin's `script.js`, register schema extension via `pluginSchemas`
-6. [ ] (Optional) Add nodeview via `pluginNodeViews`
-7. [ ] (Optional) Add menu items via `pluginMenuItemDispatchers`
-8. [ ] (Optional) Add editor-specific CSS in `style.css`
-9. [ ] (Optional) Add keybindings for common actions
-10. [ ] Test roundtrip: wiki syntax -> prosemirror -> wiki syntax (must be identical)
-11. [ ] Test visual rendering in the editor matches the rendered page
-12. [ ] Test paste from rendered HTML (if `parseDOM` is defined)
-13. [ ] PHP lint: `docker exec dokuwiki-docker-dokuwiki-1 php -l /storage/lib/plugins/<name>/action.php`
+**Allowed:** `const`/`let`, arrow functions, ES6 classes, template literals,
+destructuring, spread, `?.`, `??`, `Map`/`Set`, `Promise.allSettled()`, `fetch()`,
+`IntersectionObserver`, `async`/`await`. jQuery is available as `jQuery` (not `$`).
 
-## Reference: Existing Prosemirror Node Types
+**Forbidden:** `#privateFields`, `??=`/`||=`/`&&=`, `structuredClone()`, `.at()`,
+`Object.hasOwn()`, `.findLast()`/`.findLastIndex()`, native `<dialog>`/`showModal()`.
+CSS: no `:has()`, complex `:not()`, `aspect-ratio`, `@container`, CSS nesting.
 
-Built-in nodes in the prosemirror schema:
+---
 
-| Node Type | Group | Inline | Content | Purpose |
-|-----------|-------|--------|---------|---------|
-| `doc` | - | no | `(block\|baseonly\|container\|protected_block\|substitution_block)+` | Root |
-| `paragraph` | block | no | `inline*` | Paragraph |
-| `heading` | baseonly | no | `text*` (no marks) | Headings h1-h5 |
-| `text` | inline | yes | - | Text content |
-| `hard_break` | inline | yes | - (leaf) | Line break |
-| `horizontal_rule` | block | no | - (leaf) | `----` |
-| `image` | inline | yes | - (leaf) | Internal/external images |
-| `link` | inline | yes | - (leaf, atom) | All link types |
-| `footnote` | inline | yes | - (atom) | Footnotes |
-| `smiley` | inline | yes | - (atom) | Smileys |
-| `code_block` | protected_block | no | `text*` | Code blocks |
-| `preformatted` | protected_block | no | `text*` | Preformatted |
-| `blockquote` | container | no | `(block\|blockquote\|protected_block)+` | Blockquotes |
-| `bullet_list` | container | no | `list_item+` | Unordered lists |
-| `ordered_list` | container | no | `list_item+` | Ordered lists |
-| `table` | container | no | `table_row+` | Tables |
-| `rss` | substitution_block | no | - (atom) | RSS feeds |
-| `dwplugin_block` | protected_block | no | `text*` | Generic plugin (block) |
-| `dwplugin_inline` | inline | yes | `text*` | Generic plugin (inline) |
+## Checklist
 
-Built-in marks:
+**Path A (public-API bridge):**
 
-| Mark Type | Syntax | HTML |
-|-----------|--------|------|
-| `strong` | `**text**` | `<strong>` |
-| `em` | `//text//` | `<em>` |
-| `code` | `''text''` | `<code>` |
-| `underline` | `__text__` | `<u>` |
-| `deleted` | `<del>text</del>` | `<del>` |
-| `subscript` | `<sub>text</sub>` | `<sub>` |
-| `superscript` | `<sup>text</sup>` | `<sup>` |
-| `unformatted` | `%%text%%` | `<span class="unformatted">` |
+1. [ ] Confirm the plugin's output is self-contained (block/inline atom)
+2. [ ] `action.php`: `PROSEMIRROR_RENDER_PLUGIN` handler using public renderer methods only
+3. [ ] Named parser class extending `parser\Node`; `PROSEMIRROR_PARSE_UNKNOWN` handler
+4. [ ] `script.js`: node via `pluginSchemas` (guard on `PROSEMIRROR_API_INITIALIZED`)
+5. [ ] (Optional) nodeview + your own `AJAX_CALL_UNKNOWN` for rendered preview
+6. [ ] (Optional) menu item via `pluginMenuItemDispatchers` (lands in Plugins dropdown)
+
+**Path B (core modifications):**
+
+1. [ ] Marks-with-attrs: `renderer.php` (`addPluginMark`/`dropPluginMark` + `cdata()`),
+       `parser/Mark.php` (`syntax_open`/`syntax_close` + null-safe `$markOrder`)
+2. [ ] Node attribute: `schema/NodeStack.php` (`parent()` if needed), `schema.js`
+       (attribute + `setDOMAttr`), the relevant `parser/*Node.php` `toSyntax()`
+3. [ ] JS schema (mark/attr) via `pluginSchemas`
+4. [ ] Action handler wiring the renderer to your syntax
+
+**Both:**
+
+5. [ ] Roundtrip test: syntax → ProseMirror → syntax is identical
+6. [ ] Editor rendering matches the published page
+7. [ ] Paste test if `parseDOM` is defined
+8. [ ] PHP lint: `docker exec dokuwiki-docker-dokuwiki-1 php -l /storage/lib/plugins/<name>/<file>.php`
+
+---
+
+## Reference: built-in node types
+
+| Node | Group | Inline | Content | Notes |
+|------|-------|--------|---------|-------|
+| `doc` | – | no | `(block\|baseonly\|container\|protected_block\|substitution_block)+` | root; attrs `nocache`,`notoc` |
+| `paragraph` | block | no | `inline*` | |
+| `heading` | baseonly | no | `text*` | no marks |
+| `text` | inline | yes | – | carries marks |
+| `hard_break` | inline | yes | leaf | |
+| `horizontal_rule` | block | no | leaf | `----` |
+| `image` | inline | yes | leaf | internal/external media |
+| `link` | inline | yes | leaf/atom | all link types |
+| `footnote` | inline | yes | atom | |
+| `smiley` | inline | yes | atom | |
+| `code_block` | protected_block | no | `text*` | |
+| `preformatted` | protected_block | no | `text*` | |
+| `blockquote` | container | no | `(block\|blockquote\|protected_block)+` | |
+| `bullet_list` / `ordered_list` | container | no | `list_item+` | |
+| `list_item` | – | no | `(paragraph\|protected_block\|substitution_block)+ (ordered_list\|bullet_list)?` | |
+| `table` | container | no | `table_row+` | |
+| `table_cell` / `table_header` | – | no | `(paragraph\|protected_block\|substitution_block)+` | `align` attr |
+| `rss` | substitution_block | no | atom | |
+| `dwplugin_block` | protected_block | no | `text*` | generic fallback |
+| `dwplugin_inline` | inline | yes | `text*` | generic fallback |
+
+## Reference: built-in marks
+
+| Mark | Syntax | HTML |
+|------|--------|------|
+| `strong` | `**…**` | `<strong>` |
+| `em` | `//…//` | `<em>` |
+| `code` | `''…''` | `<code>` |
+| `underline` | `__…__` | `<u>` |
+| `deleted` | `<del>…</del>` | `<del>` |
+| `subscript` | `<sub>…</sub>` | `<sub>` |
+| `superscript` | `<sup>…</sup>` | `<sup>` |
+| `unformatted` | `%%…%%` | `<span class="unformatted">` |
+
+Mark ordering for syntax output is governed by `parser/Mark.php::$markOrder`; register
+new attributed marks there (or rely on the null-safe default from B1).
