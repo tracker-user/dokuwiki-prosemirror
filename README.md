@@ -42,6 +42,11 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](https://prosemirror.net).
 
 ## Recent Changes
 
+### v2.2.0
+
+#### Bug Fixes
+- **Whitespace-only plugin matches no longer create junk nodes**: `renderer.php::plugin()` now skips matches whose content is entirely whitespace. Previously, stray newlines between unintegrated plugin tags (e.g. `<searchtable>…<sortable>`) were each wrapped in a separate `dwplugin_block`, and `RootNode`'s `\n\n` separator would add more whitespace fragments on every editor round-trip — causing an extra block to appear in the visual editor on each syntax↔visual toggle. With this fix the node count is stable across round-trips.
+
 ### v2.1.0
 
 #### Bug Fixes

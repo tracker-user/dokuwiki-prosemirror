@@ -543,7 +543,7 @@ class renderer_plugin_prosemirror extends Doku_Renderer
 
     public function plugin($name, $data, $state = '', $match = '')
     {
-        if (empty($match)) {
+        if (empty($match) || trim($match) === '') {
             return;
         }
         $eventData = [
