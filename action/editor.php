@@ -316,14 +316,20 @@ class action_plugin_prosemirror_editor extends ActionPlugin
     /**
      * Provide the current smiley configuration to Javascript via JSINFO
      *
+     * Only injected on edit/preview pages — smileys are not needed for read mode.
      * Triggered by event: ACTION_HEADERS_SEND (AFTER)
+     *
+     * @param Event $event
+     * @param mixed $param
      *
      * @return void
      */
-    public function addJSINFO()
+    public function addJSINFO(Event $event, $param)
     {
-        global $JSINFO;
-        $JSINFO['SMILEY_CONF'] = getSmileys();
+        global $ACT, $JSINFO;
+        if (!is_array($ACT) && in_array($ACT, ['edit', 'preview'], true)) {
+            $JSINFO['SMILEY_CONF'] = getSmileys();
+        }
     }
 
     /**

@@ -21,11 +21,11 @@ abstract class LinkNode extends Node implements InlineNodeInterface
     public function __construct($data, Node $parent, Node $previousNode = null)
     {
         $this->parent = &$parent;
-        if ($previousNode !== false) {
+        if ($previousNode !== null) {
             $this->previous = &$previousNode;
         }
 
-        $this->attrs = $data['attrs'];
+        $this->attrs = $data['attrs'] ?? [];
 
         // every inline node needs a TextNode to track marks
         $this->textNode = new TextNode(['marks' => $data['marks'] ?? null], $parent, $previousNode);

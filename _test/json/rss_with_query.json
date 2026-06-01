@@ -1,0 +1,17 @@
+{
+    "type": "doc",
+    "content": [
+        {
+            "type": "rss",
+            "attrs": {
+                "url": "http://example.com/feed?a=1&b=2",
+                "max": "5",
+                "reverse": false,
+                "author": false,
+                "date": false,
+                "details": false,
+                "refresh": "4h"
+            }
+        }
+    ]
+}

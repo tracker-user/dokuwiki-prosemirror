@@ -18,7 +18,8 @@ class helper_plugin_prosemirror extends Plugin
      *
      * @param string $unparsedJSON the json produced by Prosemirror
      *
-     * @return null|string DokuWiki syntax or null on error
+     * @return string DokuWiki syntax
+     * @throws \RuntimeException on JSON decode failure
      */
     public function getSyntaxFromProsemirrorData($unparsedJSON)
     {

@@ -16,7 +16,7 @@ class ImageNode extends Node implements InlineNodeInterface
     public function __construct($data, Node $parent, Node $previousNode = null)
     {
         $this->parent = &$parent;
-        $this->attrs = $data['attrs'];
+        $this->attrs = $data['attrs'] ?? [];
 
         // every inline node needs a TextNode to track marks
         $this->textNode = new TextNode(['marks' => $data['marks'] ?? null], $parent, $previousNode);

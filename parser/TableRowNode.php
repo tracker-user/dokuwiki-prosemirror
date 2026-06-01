@@ -13,7 +13,7 @@ class TableRowNode extends Node
     public function __construct($data, Node $parent)
     {
         $this->parent = $parent;
-        foreach ($data['content'] as $cell) {
+        foreach ($data['content'] ?? [] as $cell) {
             $this->tableCells[] = new TableCellNode($cell);
         }
     }

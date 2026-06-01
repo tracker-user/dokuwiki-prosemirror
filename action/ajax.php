@@ -192,8 +192,11 @@ class action_plugin_prosemirror_ajax extends ActionPlugin
                 if ($helper->tryToLogErrorToSentry($e, ['text' => $text])) {
                     $errorMsg .= ' -- The error has been logged to Sentry.';
                 } else {
-                    $errorMsg .= '<code>' . hsc($e->getFile()) . ':' . (int)$e->getLine() . '</code>';
-                    $errorMsg .= '<pre>' . hsc($e->getTraceAsString()) . '</pre>';
+                    global $conf;
+                    if (!empty($conf['allowdebug']) || auth_isadmin()) {
+                        $errorMsg .= '<code>' . hsc($e->getFile()) . ':' . (int)$e->getLine() . '</code>';
+                        $errorMsg .= '<pre>' . hsc($e->getTraceAsString()) . '</pre>';
+                    }
                 }
 
                 http_status(500);

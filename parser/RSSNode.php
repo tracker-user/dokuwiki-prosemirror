@@ -28,7 +28,7 @@ class RSSNode extends Node
         }
         $paramString = '';
 
-        if (!empty($attrs['max']) && $attrs['max'] !== 8) {
+        if (!empty($attrs['max']) && (int)$attrs['max'] !== 8) {
             $paramString .= ' ' . $attrs['max'];
         }
 

@@ -23,11 +23,7 @@ class TableCellNode extends Node
 
         $previousNode = null;
         foreach ($data['content'] as $nodeData) {
-            try {
-                $newNode = static::getSubNode($nodeData, $this, $previousNode);
-            } catch (\Throwable $e) {
-                throw $e;
-            }
+            $newNode = static::getSubNode($nodeData, $this, $previousNode);
             $this->subnodes[] = $newNode;
             $previousNode = $newNode;
         }
@@ -54,12 +50,12 @@ class TableCellNode extends Node
 
     public function getRowSpan()
     {
-        return $this->data['attrs']['rowspan'];
+        return $this->data['attrs']['rowspan'] ?? 1;
     }
 
     public function getColSpan()
     {
-        return $this->data['attrs']['colspan'];
+        return $this->data['attrs']['colspan'] ?? 1;
     }
 
     /**

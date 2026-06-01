@@ -8,7 +8,7 @@ class PluginNode extends Node implements InlineNodeInterface
 
     public function __construct($data, Node $parent, Node $previous = null)
     {
-        $this->textNode = new TextNode($data['content'][0], $this, $previous);
+        $this->textNode = new TextNode($data['content'][0] ?? ['text' => ''], $this, $previous);
     }
 
     public function toSyntax()

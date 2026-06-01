@@ -29,10 +29,10 @@ class action_plugin_prosemirror_parser extends ActionPlugin
     }
 
     /**
-     * Triggered by: COMMON_DRAFT_SAVE
+     * Triggered by: DRAFT_SAVE
      *
      * @param Event $event
-     * @param            $param
+     * @param mixed $param
      */
     public function handleDraft(Event $event, $param)
     {
@@ -81,7 +81,7 @@ class action_plugin_prosemirror_parser extends ActionPlugin
         global $TEXT, $INPUT;
         if (
             $INPUT->server->str('REQUEST_METHOD') !== 'POST'
-            || !in_array($event->data, ['save', 'preview'])
+            || !in_array($event->data, ['save', 'preview'], true)
             || !$INPUT->post->has('prosemirror_json')
             || !get_doku_pref('plugin_prosemirror_useWYSIWYG', false)
         ) {

@@ -42,6 +42,27 @@ A WYSIWYG editor for DokuWiki powered by [ProseMirror](https://prosemirror.net).
 
 ## Recent Changes
 
+### v2.3.0
+
+#### Bug Fixes
+- **RSS URL round-trip corruption fixed**: `renderer.php::rss()` was storing the feed URL with `hsc()` applied, so any URL containing `&` was saved as `&amp;` in wikitext on every WYSIWYG save. URL is now stored raw; HTML escaping is display-side only. Added `_test/json/rss_with_query.json` fixture to lock the round-trip.
+- **Stale renderer test fixture updated**: `_test/json/nocache.json` expected a spurious empty paragraph that `removeEmptyChildParagraphs()` (v2.2.0) correctly removes. Fixture now matches actual renderer output.
+
+#### Security
+- **Server path / stack trace no longer leaked to non-admins**: The syntax→WYSIWYG AJAX error path in `action/ajax.php` was emitting `$e->getFile()` and full `getTraceAsString()` to all users when Sentry wasn't available. Now gated behind `allowdebug` config or admin role.
+
+#### Robustness
+- **Null-safety guards on parser constructors**: `LinkNode`, `ImageNode`, `PluginNode`, `TableRowNode`, `TableCellNode` — missing `attrs`, empty `content`, and absent `rowspan`/`colspan` keys no longer produce PHP warnings. Matches the pattern already used in `RootNode`.
+- **RSS `max` type comparison fixed**: `RSSNode::attrToSyntax()` compared `$attrs['max'] !== 8` with strict types. Since `max` is stored as a string in JSON (`"8"` vs `8`), the strict comparison never matched, causing a redundant `max=8` parameter to appear in saved wikitext. Fixed with `(int)$attrs['max'] !== 8`.
+- **No-op try/catch removed** in `TableCellNode`: `try { … } catch (\Throwable $e) { throw $e; }` did nothing.
+
+#### Modernization
+- **`in_array` strict mode** added in `action/parser.php::handlePreprocess()`
+- **Dead `!== false` guards replaced with `!== null`** in `TextNode` and `LinkNode`: `$previous` is typed `Node|null`, never `false` — the old comparison was always true.
+- **JSINFO smiley data now edit/preview-only**: `SMILEY_CONF` key was populated on every page request. Now only injected when `$ACT` is `edit` or `preview`.
+- **Stale docblocks corrected**: `action/parser.php` said `COMMON_DRAFT_SAVE` (correct event is `DRAFT_SAVE`); `helper.php::getSyntaxFromProsemirrorData()` said "returns null on error" (it throws).
+- **English typo fixed**: `'An link to an external page'` → `'A link to an external page'`.
+
 ### v2.2.0
 
 #### Bug Fixes
